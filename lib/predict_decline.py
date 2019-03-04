@@ -3,10 +3,13 @@
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
+from sklearn.metrics import accuracy_score, roc_curve, auc
 
 import time
 from datetime import datetime
@@ -52,7 +55,8 @@ if __name__ == "__main__":
     opt = parser.parse_args()
     
     # performance metrics to be measured
-    perf = []
+    perf = {'acc': [], 'auc': [], 'acc_BE': [], 'auc_BE': [], 
+            'acc_FE': [], 'auc_FE': [], 'acc_CC': [], 'auc_CC': []}
     
     for i in range(opt.n_iterations):
         if opt.verbose:
@@ -118,21 +122,19 @@ if __name__ == "__main__":
     
         # load trajectory classes and auxiliary data
         if opt.trajectory == "MMSE":
-            y_train_vector = df_train["MMSE_2c_traj"]
-            y_test_vector = df_test["MMSE_2c_traj"]
-            X_aux_train = df_train[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]]
-            X_aux_test = df_test[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]]
+            y_train_vector = df_train["MMSE_2c_traj"].values
+            y_test_vector = df_test["MMSE_2c_traj"].values
+            X_aux_train = df_train[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]].values
+            X_aux_test = df_test[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]].values
         elif opt.trajectory == "ADAS13":
-            y_train_vector = df_train["ADAS_3c_traj"]
-            y_test_vector = df_test["ADAS_3c_traj"]
-            X_aux_train = df_train[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]]
-            X_aux_test = df_test[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]]
+            y_train_vector = df_train["ADAS_3c_traj"].values
+            y_test_vector = df_test["ADAS_3c_traj"].values
+            X_aux_train = df_train[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values
+            X_aux_test = df_test[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values
         print(y_train_vector.shape)
         print(y_test_vector.shape)
         print(X_aux_train.shape)
         print(X_aux_test.shape)
-        print(type(X_aux_train))
-        print(type(X_aux_test))
             
         if opt.verbose:
             delta_t = time.time() - start_time
@@ -153,8 +155,6 @@ if __name__ == "__main__":
             y_train[np.arange(train_size), y_train_vector] = 1
             y_test = np.zeros((test_size, n_classes))
             y_test[np.arange(test_size), y_test_vector] = 1
-            X_aux_train = X_aux_train.as_matrix()
-            X_aux_test = X_aux_test.as_matrix()
             print(X_MR_train.shape)
             print(X_MR_test.shape)
             print(y_train.shape)
@@ -179,6 +179,7 @@ if __name__ == "__main__":
                     print('train data <-> net_arch check passed')  
                     lsn = siamese_net(net_arch)        
                     optimizer = tf.train.AdamOptimizer(learning_rate = opt.lr).minimize(lsn.loss)
+                    
                     tf.global_variables_initializer().run()
                     saver = tf.train.Saver()
                     
@@ -223,6 +224,13 @@ if __name__ == "__main__":
             print(perf_df.shape)
             
             accuracy = test_metrics["test_acc"]
+            
+            # compute the micro-averaged ROC curve
+            y_pred = test_metrics['test_preds']
+            y_pred_vector = np.argmax(y_pred, axis=1)
+            fpr,tpr,_ = roc_curve(y_test.ravel(), y_pred.ravel())
+            roc_stats = {'fpr': fpr, 'tpr': tpr}
+            roc_auc = auc(fpr, tpr)
         
         else:
             # train a baseline classifier
@@ -230,8 +238,6 @@ if __name__ == "__main__":
             train_size = X_train_baseline.shape[0]
             test_size = X_test_baseline.shape[0]
             n_classes = int(np.amax(y_train_vector) + 1)
-            X_aux_train = X_aux_train.values
-            X_aux_test = X_aux_test.values
             print(X_train_baseline.shape)
             print(X_train_followup.shape)
             print(X_aux_train.shape)
@@ -262,52 +268,85 @@ if __name__ == "__main__":
             print(X_aux_test.shape)
             
             if opt.method == "LR":
-                lr_classifier = LogisticRegression(solver="lbfgs", multi_class="multinomial", verbose=opt.verbose)
-                lr_classifier.fit(X_train, y_train_vector)
-                accuracy = lr_classifier.score(X_test, y_test_vector)
-                print(lr_classifier.classes_)
-                
+                clf = LogisticRegression(solver="lbfgs", multi_class="multinomial", verbose=opt.verbose)      
             if opt.method == "SVM":
-                svm_classifier = SVC(gamma="scale", verbose=opt.verbose)
-                svm_classifier.fit(X_train, y_train_vector)
-                accuracy = svm_classifier.score(X_test, y_test_vector)
-                
+                clf = SVC(gamma="scale", probability=True, verbose=opt.verbose) 
             if opt.method == "RF":
-                rf_classifier = RandomForestClassifier(n_estimators=100, verbose=opt.verbose)
-                rf_classifier.fit(X_train, y_train_vector)
-                accuracy = rf_classifier.score(X_test, y_test_vector)
-                print(rf_classifier.classes_)
-                
+                clf = RandomForestClassifier(n_estimators=100, verbose=opt.verbose)
             if opt.method == "ANN": # same parameters as the LSN
                 hidden_layer_sizes = opt.net_arch[:-2]
-                print(hidden_layer_sizes)
-                ann_classifier = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, verbose=opt.verbose, 
+                clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, verbose=opt.verbose, 
                                                alpha=0.01, learning_rate_init=opt.lr, batch_size=opt.batch_size)
-                ann_classifier.fit(X_train, y_train_vector)
-                accuracy = ann_classifier.score(X_test, y_test_vector)
-                print(ann_classifier.classes_)
-                
-        perf.append(accuracy)
+                                               
+            # fit and score the classifier                                
+            clf.fit(X_train, y_train_vector)
+            y_pred_vector = clf.predict(X_test)
+            accuracy = accuracy_score(y_test_vector, y_pred_vector)
             
-    #save cross-validation model performance
-    if not opt.grid_search:
-        with open(opt.out_path + "model_performance.csv", "a") as f:
-            if os.stat(opt.out_path + "model_performance.csv").st_size == 0:
-                f.write("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup," +
-                        "AccuracyMean,AccuracySD,Accuracy0,Accuracy1,Accuracy2,Accuracy3,Accuracy4," +
-                        "Accuracy5,Accuracy6,Accuracy7,Accuracy8,Accuracy9\n")
-            f.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
-                    opt.method, opt.features, opt.trajectory, opt.n_features, opt.no_clinical, opt.no_followup, 
-                    np.mean(perf), np.std(perf), perf[0], perf[1], perf[2], perf[3], perf[4], 
-                    perf[5], perf[6], perf[7], perf[8], perf[9]))
+            # compute ROC curve and AUC
+            y_pred = clf.predict_proba(X_test)
+            y_test = np.zeros((y_test_vector.shape[0], int(np.amax(y_test_vector)) + 1))
+            y_test[np.arange(y_test_vector.shape[0]), y_test_vector] = 1
+            fpr,tpr,_ = roc_curve(y_test.ravel(), y_pred.ravel())
+            roc_stats = {'fpr': fpr, 'tpr': tpr}
+            roc_auc = auc(fpr, tpr)
+            
+        # compute subgroup analysis (edge-cases vs cognitively consistent)
+        for subgroup in ["BE", "FE", "CC"]:
+            ind = np.where(df_test["{}_gr".format(opt.trajectory)] == subgroup)[0]
+            acc_sg = accuracy_score(y_test_vector[ind], y_pred_vector[ind])
+            fpr_sg,tpr_sg,_ = roc_curve(y_test[ind,:].ravel(), y_pred[ind,:].ravel())
+            roc_auc_sg = auc(fpr_sg, tpr_sg)
+            
+            roc_stats["fpr_{}".format(subgroup)] = fpr_sg
+            roc_stats["tpr_{}".format(subgroup)] = tpr_sg
+            perf["acc_{}".format(subgroup)].append(acc_sg)
+            perf["auc_{}".format(subgroup)].append(roc_auc_sg)
+                
+        perf['acc'].append(accuracy)
+        perf['auc'].append(roc_auc)
+        print("Fold {}: accuracy = {:.4f}, AUC = {:.4f}".format(i, accuracy, roc_auc))
+        
+    print(perf)
+        
+    # save ROC stats (true positive ratio, false positive ratio)
+    with open(opt.out_path + "{}_{}_{}_{}_roc_stats.pkl".format(
+              opt.method, opt.features, opt.trajectory, opt.n_features), "wb") as f:
+        pickle.dump(roc_stats, f, pickle.HIGHEST_PROTOCOL)
+    
+    # save cross-validation model performance
+    with open(opt.out_path + "model_performance.csv", "a") as f:
+        if os.stat(opt.out_path + "model_performance.csv").st_size == 0:
+            f.write("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup," +
+                    "AccuracyMean,AccuracySD,AUCMean,AUCSD,Accuracy0,Accuracy1,Accuracy2,Accuracy3," +
+                    "Accuracy4,Accuracy5,Accuracy6,Accuracy7,Accuracy8,Accuracy9," +
+                    "AUC0,AUC1,AUC2,AUC3,AUC4,AUC5,AUC6,AUC7,AUC8,AUC9," +
+                    "AccBE0,AccBE1,AccBE2,AccBE3,AccBE4,AccBE5,AccBE6,AccBE7,AccBE8,AccBE9," +
+                    "AucBE0,AucBE1,AucBE2,AucBE3,AucBE4,AucBE5,AucBE6,AucBE7,AucBE8,AucBE9," +
+                    "AccFE0,AccFE1,AccFE2,AccFE3,AccFE4,AccFE5,AccFE6,AccFE7,AccFE8,AccFE9," +
+                    "AucFE0,AucFE1,AucFE2,AucFE3,AucFE4,AucFE5,AucFE6,AucFE7,AucFE8,AucFE9," +
+                    "AccCC0,AccCC1,AccCC2,AccCC3,AccCC4,AccCC5,AccCC6,AccCC7,AccCC8,AccCC9," +
+                    "AucCC0,AucCC1,AucCC2,AucCC3,AucCC4,AucCC5,AucCC6,AucCC7,AucCC8,AucCC9\n")
                     
-    else:
-        with open(opt.out_path + "parameter_grid_search.csv", "a") as f:
-            if os.stat(opt.out_path + "parameter_grid_search.csv").st_size == 0:
-                f.write("Method,FeatureType,Trajectory,LearningRate,BatchSize,Dropout,Architecture" +
-                        "AccuracyMean,AccuracySD,Accuracy0,Accuracy1,Accuracy2,Accuracy3,Accuracy4," +
-                        "Accuracy5,Accuracy6,Accuracy7,Accuracy8,Accuracy9\n")
-            f.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
-                    opt.method, opt.features, opt.trajectory, opt.lr, opt.batch_size, opt.dropout,
-                    " ".join([str(l) for l in opt.net_arch]), np.mean(perf), np.std(perf), perf[0], 
-                    perf[1], perf[2], perf[3], perf[4], perf[5], perf[6], perf[7], perf[8], perf[9]))
+        f.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(
+                opt.method, opt.features, opt.trajectory, opt.n_features, opt.no_clinical, opt.no_followup, 
+                np.mean(perf['acc']), np.std(perf['acc']), np.mean(perf['auc']), np.std(perf['auc']),
+                perf['acc'][0], perf['acc'][1], perf['acc'][2], perf['acc'][3], perf['acc'][4], 
+                perf['acc'][5], perf['acc'][6], perf['acc'][7], perf['acc'][8], perf['acc'][9], 
+                perf['auc'][0], perf['auc'][1], perf['auc'][2], perf['auc'][3], perf['auc'][4], 
+                perf['auc'][5], perf['auc'][6], perf['auc'][7], perf['auc'][8], perf['auc'][9]) + 
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(
+                perf['acc_BE'][0], perf['acc_BE'][1], perf['acc_BE'][2], perf['acc_BE'][3], perf['acc_BE'][4], 
+                perf['acc_BE'][5], perf['acc_BE'][6], perf['acc_BE'][7], perf['acc_BE'][8], perf['acc_BE'][9], 
+                perf['auc_BE'][0], perf['auc_BE'][1], perf['auc_BE'][2], perf['auc_BE'][3], perf['auc_BE'][4], 
+                perf['auc_BE'][5], perf['auc_BE'][6], perf['auc_BE'][7], perf['auc_BE'][8], perf['auc_BE'][9]) +
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(
+                perf['acc_FE'][0], perf['acc_FE'][1], perf['acc_FE'][2], perf['acc_FE'][3], perf['acc_FE'][4], 
+                perf['acc_FE'][5], perf['acc_FE'][6], perf['acc_FE'][7], perf['acc_FE'][8], perf['acc_FE'][9], 
+                perf['auc_FE'][0], perf['auc_FE'][1], perf['auc_FE'][2], perf['auc_FE'][3], perf['auc_FE'][4], 
+                perf['auc_FE'][5], perf['auc_FE'][6], perf['auc_FE'][7], perf['auc_FE'][8], perf['auc_FE'][9],) +
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
+                perf['acc_CC'][0], perf['acc_CC'][1], perf['acc_CC'][2], perf['acc_CC'][3], perf['acc_CC'][4], 
+                perf['acc_CC'][5], perf['acc_CC'][6], perf['acc_CC'][7], perf['acc_CC'][8], perf['acc_CC'][9], 
+                perf['auc_CC'][0], perf['auc_CC'][1], perf['auc_CC'][2], perf['auc_CC'][3], perf['auc_CC'][4], 
+                perf['auc_CC'][5], perf['auc_CC'][6], perf['auc_CC'][7], perf['auc_CC'][8], perf['auc_CC'][9]))

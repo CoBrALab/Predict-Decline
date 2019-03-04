@@ -34,6 +34,7 @@ class siamese_net(object):
         self.preds = self.get_predictions(net_arch)
         self.loss = self.get_loss()
         self.accuracy = self.get_accuracy()
+        self.auc = self.get_auc()
 
     # Individual branch    
     def mlpnet_slim(self, X, net_arch):
@@ -112,8 +113,12 @@ class siamese_net(object):
 
     def get_accuracy(self):
         correct_preds = tf.equal(tf.argmax(self.labels,1), tf.argmax(self.preds,1))
-        return tf.reduce_mean(tf.cast(correct_preds, tf.float32)) 
-
+        return tf.reduce_mean(tf.cast(correct_preds, tf.float32))
+        
+    # Get method for AUC metric
+    def get_auc(self):
+        auc_value,_ = tf.metrics.auc(self.labels, self.preds)
+        return auc_value
     
 # Other helper functions
 def next_batch(s,e,mr_inputs,aux_inputs,labels):
@@ -256,7 +261,7 @@ def test_lsn(sess,lsn,data):
                                        lsn.aux_gen:X_aux_test[:,0:1],lsn.aux_clinical:X_aux_test[:,1:],
                                        lsn.labels:y_test})
 
-    test_metrics = {'test_feature_L':test_feature_L,'test_feature_R':test_feature_R,'test_preds':test_preds,'test_acc':test_acc}
+    test_metrics = {'test_feature_L':test_feature_L,'test_feature_R':test_feature_R,'test_preds':test_preds,
+                    'test_acc':test_acc}
     print('Accuracy test set %0.2f' % (100 * test_acc))
     return lsn, test_metrics
-
