@@ -3,13 +3,12 @@
 import tensorflow as tf
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.metrics import accuracy_score, roc_curve, auc
+from sklearn.metrics import accuracy_score, roc_curve, auc, confusion_matrix
 
 import time
 from datetime import datetime
@@ -25,7 +24,7 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--method", dest="method", type=str, default="LSN",
                         help="options: ANN, LR, RF, SVM, LSN, default=LSN")
     parser.add_argument("-f", "--features", dest="features", type=str, default="AAL",
-                        help="options: AAL, PCA, RFE, RLR, default=AAL")
+                        help="options: AAL, PCA, RFE, RLR, HCA, default=AAL")
     parser.add_argument("-t", "--trajectory", dest="trajectory", type=str, default="MMSE",
                         help="options: MMSE, ADAS13, default=MMSE")
     parser.add_argument("-n", "--n_features", dest="n_features", type=int, default=78,
@@ -35,7 +34,7 @@ if __name__ == "__main__":
                         help="number of cross-validation iterations")
     parser.add_argument("--no_clinical", action="store_true", default=False)
     parser.add_argument("--no_followup", action="store_true", default=False)
-    parser.add_argument("--only_clinical", action="store_true", default=False)
+    parser.add_argument("--no_thickness", action="store_true", default=False)
     parser.add_argument("--lr", type=float, default=0.001,
                         help="learning rate of the LSN [default = %(default)s]")
     parser.add_argument("--n_epochs", type=int, default=100,
@@ -57,6 +56,14 @@ if __name__ == "__main__":
     # performance metrics to be measured
     perf = {'acc': [], 'auc': [], 'acc_BE': [], 'auc_BE': [], 
             'acc_FE': [], 'auc_FE': [], 'acc_CC': [], 'auc_CC': []}
+    if opt.trajectory == "MMSE":
+        cmatrix = {'all': np.zeros((2, 2)), 'BE': np.zeros((2, 2)),
+                   'FE': np.zeros((2, 2)), 'CC': np.zeros((2, 2))}
+    elif opt.trajectory == "ADAS13":
+        cmatrix = {'all': np.zeros((3, 3)), 'BE': np.zeros((3, 3)),
+                   'FE': np.zeros((3, 3)), 'CC': np.zeros((3, 3))}
+    y_pred_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
+    y_test_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
     
     for i in range(opt.n_iterations):
         if opt.verbose:
@@ -224,13 +231,8 @@ if __name__ == "__main__":
             print(perf_df.shape)
             
             accuracy = test_metrics["test_acc"]
-            
-            # compute the micro-averaged ROC curve
             y_pred = test_metrics['test_preds']
             y_pred_vector = np.argmax(y_pred, axis=1)
-            fpr,tpr,_ = roc_curve(y_test.ravel(), y_pred.ravel())
-            roc_stats = {'fpr': fpr, 'tpr': tpr}
-            roc_auc = auc(fpr, tpr)
         
         else:
             # train a baseline classifier
@@ -245,7 +247,7 @@ if __name__ == "__main__":
             if opt.no_followup and opt.no_clinical:
                 X_train = X_train_baseline
                 X_test = X_test_baseline
-            elif opt.no_followup and opt.only_clinical:
+            elif opt.no_followup and opt.no_thickness:
                 X_train = X_aux_train[:, :3]
                 X_test = X_aux_test[:, :3]
             elif opt.no_followup:
@@ -254,7 +256,7 @@ if __name__ == "__main__":
             elif opt.no_clinical:
                 X_train = np.concatenate((X_train_baseline, X_train_followup), axis=1)
                 X_test = np.concatenate((X_test_baseline, X_test_followup), axis=1)
-            elif opt.only_clinical:
+            elif opt.no_thickness:
                 X_train = X_aux_train
                 X_test = X_aux_test
             else: # if use both followup and clinical attributes
@@ -282,71 +284,68 @@ if __name__ == "__main__":
             clf.fit(X_train, y_train_vector)
             y_pred_vector = clf.predict(X_test)
             accuracy = accuracy_score(y_test_vector, y_pred_vector)
-            
-            # compute ROC curve and AUC
             y_pred = clf.predict_proba(X_test)
             y_test = np.zeros((y_test_vector.shape[0], int(np.amax(y_test_vector)) + 1))
-            y_test[np.arange(y_test_vector.shape[0]), y_test_vector] = 1
-            fpr,tpr,_ = roc_curve(y_test.ravel(), y_pred.ravel())
-            roc_stats = {'fpr': fpr, 'tpr': tpr}
-            roc_auc = auc(fpr, tpr)
+            y_test[np.arange(y_test_vector.shape[0]), y_test_vector] = 1     
             
+        # compute AUC stats and confusion matrix
+        fpr,tpr,_ = roc_curve(y_test.ravel(), y_pred.ravel())
+        roc_auc = auc(fpr, tpr)
+        y_pred_combined['all'] = y_pred if i == 0 else np.concatenate((y_pred_combined['all'], y_pred))
+        y_test_combined['all'] = y_test if i == 0 else np.concatenate((y_test_combined['all'], y_test))
+        cmatrix['all'] += confusion_matrix(y_test_vector, y_pred_vector)
+        
         # compute subgroup analysis (edge-cases vs cognitively consistent)
-        for subgroup in ["BE", "FE", "CC"]:
-            ind = np.where(df_test["{}_gr".format(opt.trajectory)] == subgroup)[0]
+        for sg in ["BE", "FE", "CC"]:
+            ind = np.where(df_test["{}_gr".format(opt.trajectory)] == sg)[0]
             acc_sg = accuracy_score(y_test_vector[ind], y_pred_vector[ind])
             fpr_sg,tpr_sg,_ = roc_curve(y_test[ind,:].ravel(), y_pred[ind,:].ravel())
             roc_auc_sg = auc(fpr_sg, tpr_sg)
             
-            roc_stats["fpr_{}".format(subgroup)] = fpr_sg
-            roc_stats["tpr_{}".format(subgroup)] = tpr_sg
-            perf["acc_{}".format(subgroup)].append(acc_sg)
-            perf["auc_{}".format(subgroup)].append(roc_auc_sg)
+            perf["acc_{}".format(sg)].append(acc_sg)
+            perf["auc_{}".format(sg)].append(roc_auc_sg)
+            y_pred_combined[sg] = y_pred[ind,:] if i == 0 else np.concatenate((y_pred_combined[sg], y_pred[ind,:]))
+            y_test_combined[sg] = y_test[ind,:] if i == 0 else np.concatenate((y_test_combined[sg], y_test[ind,:]))
+            cmatrix[sg] += confusion_matrix(y_test_vector[ind], y_pred_vector[ind])
                 
         perf['acc'].append(accuracy)
         perf['auc'].append(roc_auc)
         print("Fold {}: accuracy = {:.4f}, AUC = {:.4f}".format(i, accuracy, roc_auc))
-        
+
+    
+    fpr,tpr,_ = roc_curve(y_test_combined['all'].ravel(), y_pred_combined['all'].ravel())
+    roc_stats = {'fpr': fpr, 'tpr': tpr}
+    for sg in ["BE", "FE", "CC"]:
+            fpr_sg,tpr_sg,_ = roc_curve(y_test_combined[sg].ravel(), y_pred_combined[sg].ravel())
+            roc_stats["fpr_{}".format(sg)] = fpr_sg
+            roc_stats["tpr_{}".format(sg)] = tpr_sg
+            
     print(perf)
         
-    # save ROC stats (true positive ratio, false positive ratio)
-    with open(opt.out_path + "{}_{}_{}_{}_roc_stats.pkl".format(
-              opt.method, opt.features, opt.trajectory, opt.n_features), "wb") as f:
+    # save ROC stats and confusion matrix
+    prefix = "{}_{}_{}_{}_".format(opt.method, opt.features, opt.trajectory, opt.n_features)
+    prefix = prefix + "no_clinical_" if opt.no_clinical else prefix
+    prefix = prefix + "no_followup_" if opt.no_followup else prefix
+    prefix = prefix + "no_thickness_" if opt.no_thickness else prefix
+    with open(opt.out_path + prefix + "roc_stats.pkl", "wb") as f:
         pickle.dump(roc_stats, f, pickle.HIGHEST_PROTOCOL)
+    with open(opt.out_path + prefix + "cmatrix.pkl", "wb") as f:
+        pickle.dump(cmatrix, f, pickle.HIGHEST_PROTOCOL)
     
     # save cross-validation model performance
     with open(opt.out_path + "model_performance.csv", "a") as f:
         if os.stat(opt.out_path + "model_performance.csv").st_size == 0:
-            f.write("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup," +
-                    "AccuracyMean,AccuracySD,AUCMean,AUCSD,Accuracy0,Accuracy1,Accuracy2,Accuracy3," +
-                    "Accuracy4,Accuracy5,Accuracy6,Accuracy7,Accuracy8,Accuracy9," +
-                    "AUC0,AUC1,AUC2,AUC3,AUC4,AUC5,AUC6,AUC7,AUC8,AUC9," +
-                    "AccBE0,AccBE1,AccBE2,AccBE3,AccBE4,AccBE5,AccBE6,AccBE7,AccBE8,AccBE9," +
-                    "AucBE0,AucBE1,AucBE2,AucBE3,AucBE4,AucBE5,AucBE6,AucBE7,AucBE8,AucBE9," +
-                    "AccFE0,AccFE1,AccFE2,AccFE3,AccFE4,AccFE5,AccFE6,AccFE7,AccFE8,AccFE9," +
-                    "AucFE0,AucFE1,AucFE2,AucFE3,AucFE4,AucFE5,AucFE6,AucFE7,AucFE8,AucFE9," +
-                    "AccCC0,AccCC1,AccCC2,AccCC3,AccCC4,AccCC5,AccCC6,AccCC7,AccCC8,AccCC9," +
-                    "AucCC0,AucCC1,AucCC2,AucCC3,AucCC4,AucCC5,AucCC6,AucCC7,AucCC8,AucCC9\n")
+            labels = ("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup,NoThickness," +
+                     "AccuracyMean,AccuracySD,AUCMean,AUCSD,")
+            for key in perf.keys():
+                for i in range(opt.n_iterations):
+                    labels += "{}_{},".format(key, i)
+            f.write(labels[:-1] + "\n")
                     
-        f.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(
-                opt.method, opt.features, opt.trajectory, opt.n_features, opt.no_clinical, opt.no_followup, 
-                np.mean(perf['acc']), np.std(perf['acc']), np.mean(perf['auc']), np.std(perf['auc']),
-                perf['acc'][0], perf['acc'][1], perf['acc'][2], perf['acc'][3], perf['acc'][4], 
-                perf['acc'][5], perf['acc'][6], perf['acc'][7], perf['acc'][8], perf['acc'][9], 
-                perf['auc'][0], perf['auc'][1], perf['auc'][2], perf['auc'][3], perf['auc'][4], 
-                perf['auc'][5], perf['auc'][6], perf['auc'][7], perf['auc'][8], perf['auc'][9]) + 
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(
-                perf['acc_BE'][0], perf['acc_BE'][1], perf['acc_BE'][2], perf['acc_BE'][3], perf['acc_BE'][4], 
-                perf['acc_BE'][5], perf['acc_BE'][6], perf['acc_BE'][7], perf['acc_BE'][8], perf['acc_BE'][9], 
-                perf['auc_BE'][0], perf['auc_BE'][1], perf['auc_BE'][2], perf['auc_BE'][3], perf['auc_BE'][4], 
-                perf['auc_BE'][5], perf['auc_BE'][6], perf['auc_BE'][7], perf['auc_BE'][8], perf['auc_BE'][9]) +
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(
-                perf['acc_FE'][0], perf['acc_FE'][1], perf['acc_FE'][2], perf['acc_FE'][3], perf['acc_FE'][4], 
-                perf['acc_FE'][5], perf['acc_FE'][6], perf['acc_FE'][7], perf['acc_FE'][8], perf['acc_FE'][9], 
-                perf['auc_FE'][0], perf['auc_FE'][1], perf['auc_FE'][2], perf['auc_FE'][3], perf['auc_FE'][4], 
-                perf['auc_FE'][5], perf['auc_FE'][6], perf['auc_FE'][7], perf['auc_FE'][8], perf['auc_FE'][9],) +
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
-                perf['acc_CC'][0], perf['acc_CC'][1], perf['acc_CC'][2], perf['acc_CC'][3], perf['acc_CC'][4], 
-                perf['acc_CC'][5], perf['acc_CC'][6], perf['acc_CC'][7], perf['acc_CC'][8], perf['acc_CC'][9], 
-                perf['auc_CC'][0], perf['auc_CC'][1], perf['auc_CC'][2], perf['auc_CC'][3], perf['auc_CC'][4], 
-                perf['auc_CC'][5], perf['auc_CC'][6], perf['auc_CC'][7], perf['auc_CC'][8], perf['auc_CC'][9]))
+        row = "{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, 
+                opt.trajectory, opt.n_features, opt.no_clinical, opt.no_followup, opt.no_thickness,
+                np.mean(perf['acc']), np.std(perf['acc']), np.mean(perf['auc']), np.std(perf['auc']))
+        for key in perf.keys():
+            for i in range(opt.n_iterations):
+                row += "{},".format(perf[key][i])
+        f.write(row[:-1] + "\n")
