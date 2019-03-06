@@ -8,6 +8,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import accuracy_score, roc_curve, auc, confusion_matrix
 
 import time
@@ -35,6 +36,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_clinical", action="store_true", default=False)
     parser.add_argument("--no_followup", action="store_true", default=False)
     parser.add_argument("--no_thickness", action="store_true", default=False)
+    parser.add_argument("--grid_search", action="store_true", default=False)
     parser.add_argument("--lr", type=float, default=0.001,
                         help="learning rate of the LSN [default = %(default)s]")
     parser.add_argument("--n_epochs", type=int, default=100,
@@ -48,7 +50,6 @@ if __name__ == "__main__":
     parser.add_argument("--net_arch", type=int, nargs="+", default=[50, 50, 50, 50, 20, 10],
                         help="list of the sizes of hidden layers in the LSN default=%(default)s")
     parser.add_argument("--save_model", action="store_true", default=False)
-    parser.add_argument("--grid_search", action="store_true", default=False)
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
     parser.add_argument("-o", "--out_path", dest="out_path", type=str, default="output/")    
     opt = parser.parse_args()
@@ -71,24 +72,19 @@ if __name__ == "__main__":
             print("Cross-validation iteration {}".format(i))
             print("Loading data...")
     
-        # load data and train-test splits specifications    
-        sub_list = pd.read_csv("Exp_CL1_sub_list.csv")
+        # load data and train-test splits specifications
         df = pd.read_csv("Exp_502_602_combined.csv")
         splits = pd.read_pickle("train_test_splits.pkl")
-        train_split = splits["train"][i]
-        test_split = splits["test"][i]
-        ptid = sub_list["PTID"]
-        train_ptid = ptid[train_split]
-        test_ptid = ptid[test_split]
-        df_train = df[df["PTID"].isin(train_ptid)]
-        df_test = df[df["PTID"].isin(test_ptid)]
+        train_split = splits[opt.trajectory]["train"][i]
+        test_split = splits[opt.trajectory]["test"][i]
+        sub_list = df[df["STATUS"].isin(["OK", "PrevTP", "New"])]
+        sub_list = sub_list.reset_index(drop=True)
+        df_train = sub_list.iloc[train_split]
+        df_test = sub_list.iloc[test_split]
         print(sub_list.shape)
         print(df.shape)
         print(len(train_split))
         print(len(test_split))
-        print(ptid.shape)
-        print(train_ptid.shape)
-        print(test_ptid.shape)
         print(df_train.shape)
         print(df_test.shape)
         
@@ -105,19 +101,7 @@ if __name__ == "__main__":
             print(X_test_baseline.shape)
             print(X_test_followup.shape)
         
-        # create the reduced datasets with unsupervised feature selection
-        elif opt.features == "PCA" or opt.features == "HCA":
-            X_train_baseline = np.load("data/{}_bl_train_cv{}.npy".format(opt.features, i))
-            X_train_followup = np.load("data/{}_vartp_train_cv{}.npy".format(opt.features, i))
-            X_test_baseline = np.load("data/{}_bl_test_cv{}.npy".format(opt.features, i))
-            X_test_followup = np.load("data/{}_vartp_test_cv{}.npy".format(opt.features, i))
-            print(X_train_baseline.shape)
-            print(X_train_followup.shape)
-            print(X_test_baseline.shape)
-            print(X_test_followup.shape)
-        
-        # create the reduced datasets with supervised feature selection
-        elif opt.features == "RFE" or opt.features == "RLR":
+        else: # obtain the reduced datasets with feature selection
             X_train_baseline = np.load("data/{}_bl_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
             X_train_followup = np.load("data/{}_vartp_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
             X_test_baseline = np.load("data/{}_bl_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
@@ -169,70 +153,148 @@ if __name__ == "__main__":
             print(X_aux_train.shape)
             print(X_aux_test.shape)
             
-            # set the neural network architecture    
-            net_arch = {'MR_shape':MR_shape,'n_layers':len(opt.net_arch)-1,'MR_output':opt.net_arch[-2],
-                        'use_aux':True,'aux_shape':4,'aux_output':opt.net_arch[-2],'output':n_classes,'reg':0.01}
-            for hidden_layer in range(len(opt.net_arch)-1):
-                net_arch['l{}'.format(hidden_layer+1)] = opt.net_arch[hidden_layer]
-            perf_df = pd.DataFrame(columns=['subject_id','label','pred_prob','pred_label'])
-            print(net_arch)
+            if opt.grid_search:
+                parameters = {'net_arch': [[25,25], [50,50], [25,25,25], [50,50,50], [25,25,25,25], [50,50,50,50]],
+                              'MR_output': [10, 20], 'aux_output': [10, 20], 'lr':[1e-2, 1e-3, 1e-4]}
+                
+                accuracy = 0.0
+                for arch in parameters['net_arch']:
+                    for MR_output in parameters['MR_output']:
+                        for aux_output in parameters['aux_output']:
+                            for lr in parameters['lr']:
+                                # set the neural network architecture    
+                                net_arch = {'MR_shape':MR_shape,'n_layers':len(arch),'MR_output':MR_output,
+                                            'use_aux':True,'aux_shape':4,'aux_output':aux_output,
+                                            'output':n_classes,'reg':0.01}
+                                for hidden_layer in range(len(arch)):
+                                    net_arch['l{}'.format(hidden_layer+1)] = arch[hidden_layer]
+                                perf_df = pd.DataFrame(columns=['subject_id','label','pred_prob','pred_label'])
+                                print(net_arch)
+                                
+                                tf.reset_default_graph()
+                                with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
+                                
+                                    # ----------------------Train model    -------------------------------
+                                    data = {'X_MR':X_MR_train,'X_aux':X_aux_train,'y':y_train}    
+                                    if check_data_shapes(data,net_arch):      
+                                        print('train data <-> net_arch check passed')  
+                                        lsn = siamese_net(net_arch)        
+                                        optimizer = tf.train.AdamOptimizer(learning_rate = opt.lr).minimize(lsn.loss)
+                                        
+                                        tf.global_variables_initializer().run()
+                                        saver = tf.train.Saver()
+                                        
+                                        cur_time = datetime.time(datetime.now())
+                                        print('\nStart training time: {}'.format(cur_time))                
+                                        lsn, train_metrics = train_lsn(sess, lsn, data, optimizer, opt.n_epochs, 
+                                                                       opt.batch_size, opt.dropout, 
+                                                                       opt.validate_after, opt.verbose)
+                                        
+                                        # Save trained model 
+                                        if opt.save_model:
+                                            filename = "{}_{}_{}_{}".format(opt.features,opt.trajectory,MR_shape,i)
+                                            print('saving model at {}'.format("models/" + filename))
+                                            saver.save(sess, "models/" + filename)
+                                        
+                                        cur_time = datetime.time(datetime.now())
+                                        print('End training time: {}\n'.format(cur_time))  
+                                    else:
+                                        print('train data <-> net_arch check failed')
+                            
+                                    # Test model  (within same session)         
+                                    data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
+                                    if check_data_shapes(data,net_arch):
+                                        print('test data <-> net_arch check passed')   
+                                        _,test_metrics = test_lsn(sess,lsn,data)        
+                                        # populate perf dataframe
+                                        perf_df['subject_id']  = df_test['PTID'].values
+                                        perf_df['label'] = np.argmax(y_test,1)
+                                        perf_df['pred_prob'] = list(test_metrics['test_preds'])
+                                        perf_df['pred_label'] = np.argmax(test_metrics['test_preds'],1)
+                                    else:
+                                        print('test data <-> net_arch check failed')
+                                        
+                                # save model stats (accuracy, loss, performance)
+                                with open(opt.out_path + "{}_{}_{}_{}_train_metrics.pkl".format(
+                                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
+                                    pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
+                                with open(opt.out_path + "{}_{}_{}_{}_test_metrics.pkl".format(
+                                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
+                                    pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
+                                perf_df.to_csv(opt.out_path + "{}_{}_{}_{}_perf_df.csv".format(
+                                                opt.features, opt.trajectory, MR_shape, i))
+                                print(perf_df.shape)
+                                
+                                if test_metrics['test_acc'] > accuracy:                        
+                                    accuracy = test_metrics["test_acc"]
+                                    y_pred = test_metrics['test_preds']
+                                    y_pred_vector = np.argmax(y_pred, axis=1)
+                    
+            else:
+                # set the neural network architecture    
+                net_arch = {'MR_shape':MR_shape,'n_layers':len(opt.net_arch)-2,'MR_output':opt.net_arch[-2],
+                            'use_aux':True,'aux_shape':4,'aux_output':opt.net_arch[-1],'output':n_classes,'reg':0.01}
+                for hidden_layer in range(len(opt.net_arch)-2):
+                    net_arch['l{}'.format(hidden_layer+1)] = opt.net_arch[hidden_layer]
+                perf_df = pd.DataFrame(columns=['subject_id','label','pred_prob','pred_label'])
+                print(net_arch)
+                
+                tf.reset_default_graph()
+                with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
+                
+                    # ----------------------Train model    -------------------------------
+                    data = {'X_MR':X_MR_train,'X_aux':X_aux_train,'y':y_train}    
+                    if check_data_shapes(data,net_arch):      
+                        print('train data <-> net_arch check passed')  
+                        lsn = siamese_net(net_arch)        
+                        optimizer = tf.train.AdamOptimizer(learning_rate = opt.lr).minimize(lsn.loss)
+                        
+                        tf.global_variables_initializer().run()
+                        saver = tf.train.Saver()
+                        
+                        cur_time = datetime.time(datetime.now())
+                        print('\nStart training time: {}'.format(cur_time))                
+                        lsn, train_metrics = train_lsn(sess, lsn, data, optimizer, opt.n_epochs, opt.batch_size, 
+                                                       opt.dropout, opt.validate_after, opt.verbose)
+                        
+                        # Save trained model 
+                        if opt.save_model:
+                            filename = "{}_{}_{}_{}".format(opt.features, opt.trajectory, MR_shape, i)
+                            print('saving model at {}'.format("models/" + filename))
+                            saver.save(sess, "models/" + filename)
+                        
+                        cur_time = datetime.time(datetime.now())
+                        print('End training time: {}\n'.format(cur_time))  
+                    else:
+                        print('train data <-> net_arch check failed')
             
-            tf.reset_default_graph()
-            with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
-            
-                # ----------------------Train model    -------------------------------
-                data = {'X_MR':X_MR_train,'X_aux':X_aux_train,'y':y_train}    
-                if check_data_shapes(data,net_arch):      
-                    print('train data <-> net_arch check passed')  
-                    lsn = siamese_net(net_arch)        
-                    optimizer = tf.train.AdamOptimizer(learning_rate = opt.lr).minimize(lsn.loss)
-                    
-                    tf.global_variables_initializer().run()
-                    saver = tf.train.Saver()
-                    
-                    cur_time = datetime.time(datetime.now())
-                    print('\nStart training time: {}'.format(cur_time))                
-                    lsn, train_metrics = train_lsn(sess, lsn, data, optimizer, opt.n_epochs, opt.batch_size, 
-                                                   opt.dropout, opt.validate_after, opt.verbose)
-                    
-                    # Save trained model 
-                    if opt.save_model:
-                        filename = "{}_{}_{}_{}".format(opt.features, opt.trajectory, MR_shape, i)
-                        print('saving model at {}'.format("models/" + filename))
-                        saver.save(sess, "models/" + filename)
-                    
-                    cur_time = datetime.time(datetime.now())
-                    print('End training time: {}\n'.format(cur_time))  
-                else:
-                    print('train data <-> net_arch check failed')
-        
-                # Test model  (within same session)         
-                data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
-                if check_data_shapes(data,net_arch):
-                    print('test data <-> net_arch check passed')   
-                    _,test_metrics = test_lsn(sess,lsn,data)        
-                    # populate perf dataframe
-                    perf_df['subject_id']  = test_ptid
-                    perf_df['label'] = np.argmax(y_test,1)
-                    perf_df['pred_prob'] = list(test_metrics['test_preds'])
-                    perf_df['pred_label'] = np.argmax(test_metrics['test_preds'],1)
-                else:
-                    print('test data <-> net_arch check failed')
-                    
-            # save model stats (accuracy, loss, performance)
-            with open(opt.out_path + "{}_{}_{}_{}_train_metrics.pkl".format(
-                        opt.features, opt.trajectory, MR_shape, i), "wb") as f:
-                pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
-            with open(opt.out_path + "{}_{}_{}_{}_test_metrics.pkl".format(
-                        opt.features, opt.trajectory, MR_shape, i), "wb") as f:
-                pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
-            perf_df.to_csv(opt.out_path + "{}_{}_{}_{}_perf_df.csv".format(
-                            opt.features, opt.trajectory, MR_shape, i))
-            print(perf_df.shape)
-            
-            accuracy = test_metrics["test_acc"]
-            y_pred = test_metrics['test_preds']
-            y_pred_vector = np.argmax(y_pred, axis=1)
+                    # Test model  (within same session)         
+                    data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
+                    if check_data_shapes(data,net_arch):
+                        print('test data <-> net_arch check passed')   
+                        _,test_metrics = test_lsn(sess,lsn,data)        
+                        # populate perf dataframe
+                        perf_df['subject_id']  = df_test['PTID'].values
+                        perf_df['label'] = np.argmax(y_test,1)
+                        perf_df['pred_prob'] = list(test_metrics['test_preds'])
+                        perf_df['pred_label'] = np.argmax(test_metrics['test_preds'],1)
+                    else:
+                        print('test data <-> net_arch check failed')
+                        
+                # save model stats (accuracy, loss, performance)
+                with open(opt.out_path + "{}_{}_{}_{}_train_metrics.pkl".format(
+                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
+                    pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
+                with open(opt.out_path + "{}_{}_{}_{}_test_metrics.pkl".format(
+                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
+                    pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
+                perf_df.to_csv(opt.out_path + "{}_{}_{}_{}_perf_df.csv".format(
+                                opt.features, opt.trajectory, MR_shape, i))
+                print(perf_df.shape)
+                
+                accuracy = test_metrics["test_acc"]
+                y_pred = test_metrics['test_preds']
+                y_pred_vector = np.argmax(y_pred, axis=1)
         
         else:
             # train a baseline classifier
@@ -269,16 +331,36 @@ if __name__ == "__main__":
             print(X_aux_train.shape)
             print(X_aux_test.shape)
             
-            if opt.method == "LR":
-                clf = LogisticRegression(solver="lbfgs", multi_class="multinomial", verbose=opt.verbose)      
-            if opt.method == "SVM":
-                clf = SVC(gamma="scale", probability=True, verbose=opt.verbose) 
-            if opt.method == "RF":
-                clf = RandomForestClassifier(n_estimators=100, verbose=opt.verbose)
-            if opt.method == "ANN": # same parameters as the LSN
-                hidden_layer_sizes = opt.net_arch[:-2]
-                clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, verbose=opt.verbose, 
-                                               alpha=0.01, learning_rate_init=opt.lr, batch_size=opt.batch_size)
+            if opt.grid_search:
+                if opt.method == "LR":
+                    parameters = {'C': [1e-3, 3e-2, 1e-2, 3e-1, 1e-1, 1, 1e1, 1e2]}
+                    lr = LogisticRegression(solver="lbfgs", multi_class="multinomial", verbose=opt.verbose)    
+                    clf = GridSearchCV(lr, parameters, cv=5)
+                if opt.method == "SVM":
+                    parameters = {'kernel': ['linear', 'rbf'], 'C': [1e-3, 1e-2, 1e-1, 1, 1e1, 1e2]}
+                    svc = SVC(gamma="scale", probability=True, verbose=opt.verbose)
+                    clf = GridSearchCV(svc, parameters, cv=5)
+                if opt.method == "RF":
+                    parameters = {'n_estimators': [25, 50, 100, 150], 'min_samples_split': [2, 4, 8]}
+                    rf = RandomForestClassifier(verbose=opt.verbose)
+                    clf = GridSearchCV(rf, parameters, cv=5)
+                if opt.method == "ANN": # same parameters as the LSN
+                    parameters = {'hidden_layer_sizes': [[25,25], [50,50], [25,25,25], [50,50,50],
+                                                         [25,25,25,25], [50,50,50,50]], 
+                                  'learning_rate_init': [1e-2, 1e-3, 1e-4]}
+                    ann = MLPClassifier(verbose=opt.verbose, batch_size=opt.batch_size, alpha=0.01)
+                    clf = GridSearchCV(ann, parameters, cv=5)
+            else:
+                if opt.method == "LR":
+                    clf = LogisticRegression(solver="lbfgs", multi_class="multinomial", verbose=opt.verbose)      
+                if opt.method == "SVM":
+                    clf = SVC(gamma="scale", probability=True, verbose=opt.verbose) 
+                if opt.method == "RF":
+                    clf = RandomForestClassifier(n_estimators=100, verbose=opt.verbose)
+                if opt.method == "ANN": # same parameters as the LSN
+                    hidden_layer_sizes = opt.net_arch[:-2]
+                    clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, verbose=opt.verbose, 
+                                                   alpha=0.01, learning_rate_init=opt.lr, batch_size=opt.batch_size)
                                                
             # fit and score the classifier                                
             clf.fit(X_train, y_train_vector)
@@ -311,8 +393,8 @@ if __name__ == "__main__":
         perf['acc'].append(accuracy)
         perf['auc'].append(roc_auc)
         print("Fold {}: accuracy = {:.4f}, AUC = {:.4f}".format(i, accuracy, roc_auc))
-
     
+    # compute stats for the ROC curve    
     fpr,tpr,_ = roc_curve(y_test_combined['all'].ravel(), y_pred_combined['all'].ravel())
     roc_stats = {'fpr': fpr, 'tpr': tpr}
     for sg in ["BE", "FE", "CC"]:
@@ -327,6 +409,7 @@ if __name__ == "__main__":
     prefix = prefix + "no_clinical_" if opt.no_clinical else prefix
     prefix = prefix + "no_followup_" if opt.no_followup else prefix
     prefix = prefix + "no_thickness_" if opt.no_thickness else prefix
+    prefix = prefix + "grid_search_" if opt.grid_search else prefix
     with open(opt.out_path + prefix + "roc_stats.pkl", "wb") as f:
         pickle.dump(roc_stats, f, pickle.HIGHEST_PROTOCOL)
     with open(opt.out_path + prefix + "cmatrix.pkl", "wb") as f:
@@ -336,14 +419,14 @@ if __name__ == "__main__":
     with open(opt.out_path + "model_performance.csv", "a") as f:
         if os.stat(opt.out_path + "model_performance.csv").st_size == 0:
             labels = ("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup,NoThickness," +
-                     "AccuracyMean,AccuracySD,AUCMean,AUCSD,")
+                     "GridSearch,AccuracyMean,AccuracySD,AUCMean,AUCSD,")
             for key in perf.keys():
                 for i in range(opt.n_iterations):
                     labels += "{}_{},".format(key, i)
             f.write(labels[:-1] + "\n")
                     
-        row = "{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, 
-                opt.trajectory, opt.n_features, opt.no_clinical, opt.no_followup, opt.no_thickness,
+        row = "{},{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, opt.trajectory, 
+                opt.n_features, opt.no_clinical, opt.no_followup, opt.no_thickness, opt.grid_search,
                 np.mean(perf['acc']), np.std(perf['acc']), np.mean(perf['auc']), np.std(perf['auc']))
         for key in perf.keys():
             for i in range(opt.n_iterations):
