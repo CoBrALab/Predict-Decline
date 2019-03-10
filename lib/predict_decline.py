@@ -37,6 +37,7 @@ if __name__ == "__main__":
     parser.add_argument("--no_followup", action="store_true", default=False)
     parser.add_argument("--no_thickness", action="store_true", default=False)
     parser.add_argument("--grid_search", action="store_true", default=False)
+    parser.add_argument("--replication_study", action="store_true", default=False)
     parser.add_argument("--lr", type=float, default=0.001,
                         help="learning rate of the LSN [default = %(default)s]")
     parser.add_argument("--n_epochs", type=int, default=100,
@@ -57,14 +58,15 @@ if __name__ == "__main__":
     # performance metrics to be measured
     perf = {'acc': [], 'auc': [], 'acc_BE': [], 'auc_BE': [], 
             'acc_FE': [], 'auc_FE': [], 'acc_CC': [], 'auc_CC': []}
-    if opt.trajectory == "MMSE":
-        cmatrix = {'all': np.zeros((2, 2)), 'BE': np.zeros((2, 2)),
-                   'FE': np.zeros((2, 2)), 'CC': np.zeros((2, 2))}
-    elif opt.trajectory == "ADAS13":
-        cmatrix = {'all': np.zeros((3, 3)), 'BE': np.zeros((3, 3)),
-                   'FE': np.zeros((3, 3)), 'CC': np.zeros((3, 3))}
+    cmatrix = {'all': [], 'BE': [], 'FE': [], 'CC': []}
     y_pred_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
     y_test_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
+    
+    if opt.replication_study and opt.trajectory == 'MMSE':
+        aibl_perf = {'acc': [], 'auc': []}
+        aibl_cmatrix = []
+        aibl_pred_combined = np.array([])
+        aibl_test_combined = np.array([])
     
     for i in range(opt.n_iterations):
         if opt.verbose:
@@ -79,27 +81,34 @@ if __name__ == "__main__":
         test_split = splits[opt.trajectory]["test"][i]
         sub_list = df[df["STATUS"].isin(["OK", "PrevTP", "New"])]
         sub_list = sub_list.reset_index(drop=True)
-        df_train = sub_list.iloc[train_split]
-        df_test = sub_list.iloc[test_split]
         print(sub_list.shape)
         print(df.shape)
         print(len(train_split))
         print(len(test_split))
-        print(df_train.shape)
-        print(df_test.shape)
+        
+        if opt.replication_study: # load the AIBL replication data
+            df_aibl = pd.read_csv("AIBL_replication_data.csv")
         
         # obtain the CT values grouped with ROI atlases
         if opt.features == "AAL":
-            loc_bl = df_train.columns.get_loc("ACG.L_CT_bl")
-            loc_var_tp = df_train.columns.get_loc("ACG.L_CT_var_tp")
-            X_train_baseline = df_train.iloc[:, loc_bl:loc_bl+78].values
-            X_train_followup = df_train.iloc[:, loc_var_tp:loc_var_tp+78].values
-            X_test_baseline = df_test.iloc[:, loc_bl:loc_bl+78].values
-            X_test_followup = df_test.iloc[:, loc_var_tp:loc_var_tp+78].values
+            ct_cols_bl = list(df.columns[pd.Series(df.columns).str.contains('CT_bl')]) 
+            ct_cols_followup =list(df.columns[pd.Series(df.columns).str.contains('CT_var_tp')])
+            X_train_baseline = sub_list[ct_cols_bl].values[train_split]
+            X_train_followup = sub_list[ct_cols_followup].values[train_split]
+            X_test_baseline = sub_list[ct_cols_bl].values[test_split]
+            X_test_followup = sub_list[ct_cols_followup].values[test_split]
             print(X_train_baseline.shape)
             print(X_train_followup.shape)
             print(X_test_baseline.shape)
             print(X_test_followup.shape)
+            
+            if opt.replication_study and opt.trajectory == "MMSE":
+                ct_cols_bl = list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_bl')]) 
+                ct_cols_followup =list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_m18')])
+                aibl_baseline = df_aibl[ct_cols_bl].values
+                aibl_followup = df_aibl[ct_cols_followup].values
+                print(aibl_baseline.shape)
+                print(aibl_followup.shape)
         
         else: # obtain the reduced datasets with feature selection
             X_train_baseline = np.load("data/{}_bl_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
@@ -110,18 +119,30 @@ if __name__ == "__main__":
             print(X_train_followup.shape)
             print(X_test_baseline.shape)
             print(X_test_followup.shape)
+            if opt.replication_study and opt.trajectory == "MMSE":
+                aibl_baseline = np.load("data_replication/{}_bl_cv{}.npy".format(opt.features, i))
+                aibl_followup = np.load("data_replication/{}_vartp_cv{}.npy".format(opt.features, i))
+                print(aibl_baseline.shape)
+                print(aibl_followup.shape)
     
         # load trajectory classes and auxiliary data
         if opt.trajectory == "MMSE":
-            y_train_vector = df_train["MMSE_2c_traj"].values
-            y_test_vector = df_test["MMSE_2c_traj"].values
-            X_aux_train = df_train[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]].values
-            X_aux_test = df_test[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]].values
+            y_train_vector = sub_list["MMSE_2c_traj"].values[train_split]
+            y_test_vector = sub_list["MMSE_2c_traj"].values[test_split]
+            X_aux_train = sub_list[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]].values[train_split]
+            X_aux_test = sub_list[["APOE4", "AGE", "MMSE_bl", "MMSE_var_tp"]].values[test_split]
+            
+            if opt.replication_study:
+                aibl_aux = df_aibl[["APOE4", "AGE", "MMSE_bl", "MMSE_m18"]].values
+                aibl_y_vector = df_aibl["traj"].values
+                print(aibl_aux.shape)
+                print(aibl_y_vector.shape)
+            
         elif opt.trajectory == "ADAS13":
-            y_train_vector = df_train["ADAS_3c_traj"].values
-            y_test_vector = df_test["ADAS_3c_traj"].values
-            X_aux_train = df_train[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values
-            X_aux_test = df_test[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values
+            y_train_vector = sub_list["ADAS_3c_traj"].values[train_split]
+            y_test_vector = sub_list["ADAS_3c_traj"].values[test_split]
+            X_aux_train = sub_list[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values[train_split]
+            X_aux_test = sub_list[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values[test_split]
         print(y_train_vector.shape)
         print(y_test_vector.shape)
         print(X_aux_train.shape)
@@ -152,6 +173,13 @@ if __name__ == "__main__":
             print(y_test.shape)
             print(X_aux_train.shape)
             print(X_aux_test.shape)
+            
+            if opt.replication_study and opt.trajectory == "MMSE":
+                aibl_MR = np.stack((aibl_baseline, aibl_followup), axis=1)
+                aibl_y = np.zeros((aibl_baseline.shape[0], n_classes))
+                aibl_y[np.arange(aibl_baseline.shape[0]), aibl_y_vector] = 1
+                print(aibl_MR.shape)
+                print(aibl_y.shape)
             
             if opt.grid_search:
                 parameters = {'net_arch': [[25,25], [50,50], [25,25,25], [50,50,50], [25,25,25,25], [50,50,50,50]],
@@ -205,7 +233,16 @@ if __name__ == "__main__":
                                     data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
                                     if check_data_shapes(data,net_arch):
                                         print('test data <-> net_arch check passed')   
-                                        _,test_metrics = test_lsn(sess,lsn,data)        
+                                        _,test_metrics = test_lsn(sess,lsn,data)
+                                        
+                                        if opt.replication_study and opt.trajectory == "MMSE":
+                                            aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
+                                            _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
+                                            if test_metrics['test_acc'] > accuracy:
+                                                aibl_accuracy = aibl_metrics['test_acc']
+                                                aibl_pred = aibl_metrics['test_preds']
+                                                aibl_pred_vector = np.argmax(aibl_pred, axis=1)
+                                        
                                         # populate perf dataframe
                                         perf_df['subject_id']  = df_test['PTID'].values
                                         perf_df['label'] = np.argmax(y_test,1)
@@ -273,8 +310,16 @@ if __name__ == "__main__":
                     if check_data_shapes(data,net_arch):
                         print('test data <-> net_arch check passed')   
                         _,test_metrics = test_lsn(sess,lsn,data)        
+                        
+                        if opt.replication_study and opt.trajectory == "MMSE":
+                            aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
+                            _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
+                            aibl_accuracy = aibl_metrics['test_acc']
+                            aibl_pred = aibl_metrics['test_preds']
+                            aibl_pred_vector = np.argmax(aibl_pred, axis=1)                        
+                        
                         # populate perf dataframe
-                        perf_df['subject_id']  = df_test['PTID'].values
+                        perf_df['subject_id']  = sub_list['PTID'].values[test_split]
                         perf_df['label'] = np.argmax(y_test,1)
                         perf_df['pred_prob'] = list(test_metrics['test_preds'])
                         perf_df['pred_label'] = np.argmax(test_metrics['test_preds'],1)
@@ -309,27 +354,47 @@ if __name__ == "__main__":
             if opt.no_followup and opt.no_clinical:
                 X_train = X_train_baseline
                 X_test = X_test_baseline
+                if opt.replication_study and opt.trajectory == 'MMSE':
+                    aibl_test = aibl_baseline
+                    
             elif opt.no_followup and opt.no_thickness:
                 X_train = X_aux_train[:, :3]
                 X_test = X_aux_test[:, :3]
+                if opt.replication_study and opt.trajectory == 'MMSE':
+                    aibl_test = aibl_aux[:, :3]
+                    
             elif opt.no_followup:
-                X_train = np.concatenate((X_train_baseline, X_aux_train), axis=1)
-                X_test = np.concatenate((X_test_baseline, X_aux_test), axis=1)
+                X_train = np.concatenate((X_train_baseline, X_aux_train[:, :3]), axis=1)
+                X_test = np.concatenate((X_test_baseline, X_aux_test[:, :3]), axis=1)
+                if opt.replication_study and opt.trajectory == 'MMSE':
+                    aibl_test = np.concatenate((aibl_baseline, aibl_aux[:, :3]), axis=1)
+                    
             elif opt.no_clinical:
                 X_train = np.concatenate((X_train_baseline, X_train_followup), axis=1)
                 X_test = np.concatenate((X_test_baseline, X_test_followup), axis=1)
+                if opt.replication_study and opt.trajectory == 'MMSE':
+                    aibl_test = np.concatenate((aibl_baseline, aibl_followup), axis=1)                
+                
             elif opt.no_thickness:
                 X_train = X_aux_train
                 X_test = X_aux_test
+                if opt.replication_study and opt.trajectory == 'MMSE':
+                    aibl_test = aibl_aux
+                
             else: # if use both followup and clinical attributes
                 X_train = np.concatenate((X_train_baseline, X_train_followup, X_aux_train), axis=1)
                 X_test = np.concatenate((X_test_baseline, X_test_followup, X_aux_test), axis=1)
+                if opt.replication_study and opt.trajectory == 'MMSE':
+                    aibl_test = np.concatenate((aibl_baseline, aibl_followup, aibl_aux), axis=1)
+                
             print(X_train.shape)
             print(X_test.shape)
             print(y_train_vector.shape)
             print(y_test_vector.shape)
             print(X_aux_train.shape)
             print(X_aux_test.shape)
+            print(aibl_test[0])
+            print(aibl_test.shape)
             
             if opt.grid_search:
                 if opt.method == "LR":
@@ -359,8 +424,8 @@ if __name__ == "__main__":
                     clf = RandomForestClassifier(n_estimators=100, verbose=opt.verbose)
                 if opt.method == "ANN": # same parameters as the LSN
                     hidden_layer_sizes = opt.net_arch[:-2]
-                    clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, verbose=opt.verbose, 
-                                                   alpha=0.01, learning_rate_init=opt.lr, batch_size=opt.batch_size)
+                    clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, alpha=0.01, verbose=opt.verbose, 
+                                        learning_rate_init=opt.lr, batch_size=opt.batch_size)
                                                
             # fit and score the classifier                                
             clf.fit(X_train, y_train_vector)
@@ -368,18 +433,27 @@ if __name__ == "__main__":
             accuracy = accuracy_score(y_test_vector, y_pred_vector)
             y_pred = clf.predict_proba(X_test)
             y_test = np.zeros((y_test_vector.shape[0], int(np.amax(y_test_vector)) + 1))
-            y_test[np.arange(y_test_vector.shape[0]), y_test_vector] = 1     
+            y_test[np.arange(y_test_vector.shape[0]), y_test_vector] = 1
+            
+            if opt.replication_study and opt.trajectory == 'MMSE':
+                aibl_pred_vector = clf.predict(aibl_test)
+                aibl_accuracy = accuracy_score(aibl_y_vector, aibl_pred_vector)
+                aibl_pred = clf.predict_proba(aibl_test)
+                aibl_y = np.zeros((aibl_y_vector.shape[0], int(np.amax(aibl_y_vector)) + 1))
+                aibl_y[np.arange(aibl_y_vector.shape[0]), aibl_y_vector] = 1
             
         # compute AUC stats and confusion matrix
         fpr,tpr,_ = roc_curve(y_test.ravel(), y_pred.ravel())
         roc_auc = auc(fpr, tpr)
         y_pred_combined['all'] = y_pred if i == 0 else np.concatenate((y_pred_combined['all'], y_pred))
         y_test_combined['all'] = y_test if i == 0 else np.concatenate((y_test_combined['all'], y_test))
-        cmatrix['all'] += confusion_matrix(y_test_vector, y_pred_vector)
+        cmatrix['all'].append(confusion_matrix(y_test_vector, y_pred_vector))
+        print(np.bincount(y_pred_vector))
+        print(np.bincount(y_test_vector))
         
         # compute subgroup analysis (edge-cases vs cognitively consistent)
         for sg in ["BE", "FE", "CC"]:
-            ind = np.where(df_test["{}_gr".format(opt.trajectory)] == sg)[0]
+            ind = np.where(sub_list["{}_gr".format(opt.trajectory)].values[test_split] == sg)[0]
             acc_sg = accuracy_score(y_test_vector[ind], y_pred_vector[ind])
             fpr_sg,tpr_sg,_ = roc_curve(y_test[ind,:].ravel(), y_pred[ind,:].ravel())
             roc_auc_sg = auc(fpr_sg, tpr_sg)
@@ -388,11 +462,22 @@ if __name__ == "__main__":
             perf["auc_{}".format(sg)].append(roc_auc_sg)
             y_pred_combined[sg] = y_pred[ind,:] if i == 0 else np.concatenate((y_pred_combined[sg], y_pred[ind,:]))
             y_test_combined[sg] = y_test[ind,:] if i == 0 else np.concatenate((y_test_combined[sg], y_test[ind,:]))
-            cmatrix[sg] += confusion_matrix(y_test_vector[ind], y_pred_vector[ind])
+            cmatrix[sg].append(confusion_matrix(y_test_vector[ind], y_pred_vector[ind]))
                 
         perf['acc'].append(accuracy)
         perf['auc'].append(roc_auc)
         print("Fold {}: accuracy = {:.4f}, AUC = {:.4f}".format(i, accuracy, roc_auc))
+        
+        if opt.replication_study and opt.trajectory == 'MMSE':
+            fpr,tpr,_ = roc_curve(aibl_y.ravel(), aibl_pred.ravel())
+            aibl_roc_auc = auc(fpr, tpr)
+            aibl_pred_combined = aibl_pred if i == 0 else np.concatenate((aibl_pred_combined, aibl_pred))
+            aibl_test_combined = aibl_y if i == 0 else np.concatenate((aibl_test_combined, aibl_y))
+            aibl_cmatrix.append(confusion_matrix(aibl_y_vector, aibl_pred_vector))
+            aibl_perf['acc'].append(aibl_accuracy)
+            aibl_perf['auc'].append(aibl_roc_auc)
+            print(np.bincount(aibl_pred_vector))
+            print(np.bincount(aibl_y_vector))
     
     # compute stats for the ROC curve    
     fpr,tpr,_ = roc_curve(y_test_combined['all'].ravel(), y_pred_combined['all'].ravel())
@@ -402,7 +487,12 @@ if __name__ == "__main__":
             roc_stats["fpr_{}".format(sg)] = fpr_sg
             roc_stats["tpr_{}".format(sg)] = tpr_sg
             
+    if opt.replication_study and opt.trajectory == 'MMSE':
+        fpr,tpr,_ = roc_curve(aibl_test_combined.ravel(), aibl_pred_combined.ravel())
+        aibl_roc_stats = {'fpr': fpr, 'tpr': tpr}
+    
     print(perf)
+    print(aibl_perf)
         
     # save ROC stats and confusion matrix
     prefix = "{}_{}_{}_{}_".format(opt.method, opt.features, opt.trajectory, opt.n_features)
@@ -432,3 +522,33 @@ if __name__ == "__main__":
             for i in range(opt.n_iterations):
                 row += "{},".format(perf[key][i])
         f.write(row[:-1] + "\n")
+        
+    # save AIBL replication study performance
+    if opt.replication_study and opt.trajectory == 'MMSE':
+        prefix = "{}_{}_{}_{}_".format(opt.method, opt.features, opt.trajectory, opt.n_features)
+        prefix = prefix + "no_clinical_" if opt.no_clinical else prefix
+        prefix = prefix + "no_followup_" if opt.no_followup else prefix
+        prefix = prefix + "no_thickness_" if opt.no_thickness else prefix
+        prefix = prefix + "grid_search_" if opt.grid_search else prefix
+        with open(opt.out_path + prefix + "aibl_roc_stats.pkl", "wb") as f:
+            pickle.dump(aibl_roc_stats, f, pickle.HIGHEST_PROTOCOL)
+        with open(opt.out_path + prefix + "aibl_cmatrix.pkl", "wb") as f:
+            pickle.dump(aibl_cmatrix, f, pickle.HIGHEST_PROTOCOL)
+        
+        with open(opt.out_path + "replication_performance.csv", "a") as f:
+            if os.stat(opt.out_path + "replication_performance.csv").st_size == 0:
+                labels = ("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup,NoThickness," +
+                         "GridSearch,AccuracyMean,AccuracySD,AUCMean,AUCSD,")
+                for key in aibl_perf.keys():
+                    for i in range(opt.n_iterations):
+                        labels += "{}_{},".format(key, i)
+                f.write(labels[:-1] + "\n")
+                        
+            row = "{},{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, opt.trajectory, 
+                    opt.n_features, opt.no_clinical, opt.no_followup, opt.no_thickness, opt.grid_search,
+                    np.mean(aibl_perf['acc']), np.std(aibl_perf['acc']),
+                    np.mean(aibl_perf['auc']), np.std(aibl_perf['auc']))
+            for key in aibl_perf.keys():
+                for i in range(opt.n_iterations):
+                    row += "{},".format(aibl_perf[key][i])
+            f.write(row[:-1] + "\n")
