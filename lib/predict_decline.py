@@ -61,6 +61,7 @@ if __name__ == "__main__":
     cmatrix = {'all': [], 'BE': [], 'FE': [], 'CC': []}
     y_pred_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
     y_test_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
+    perf_df = []
     
     if opt.replication_study and opt.trajectory == 'MMSE':
         aibl_perf = {'acc': [], 'auc': []}
@@ -89,41 +90,42 @@ if __name__ == "__main__":
         if opt.replication_study: # load the AIBL replication data
             df_aibl = pd.read_csv("AIBL_replication_data.csv")
         
-        # obtain the CT values grouped with ROI atlases
-        if opt.features == "AAL":
-            ct_cols_bl = list(df.columns[pd.Series(df.columns).str.contains('CT_bl')]) 
-            ct_cols_followup =list(df.columns[pd.Series(df.columns).str.contains('CT_var_tp')])
-            X_train_baseline = sub_list[ct_cols_bl].values[train_split]
-            X_train_followup = sub_list[ct_cols_followup].values[train_split]
-            X_test_baseline = sub_list[ct_cols_bl].values[test_split]
-            X_test_followup = sub_list[ct_cols_followup].values[test_split]
-            print(X_train_baseline.shape)
-            print(X_train_followup.shape)
-            print(X_test_baseline.shape)
-            print(X_test_followup.shape)
+        if not opt.no_thickness:
             
-            if opt.replication_study and opt.trajectory == "MMSE":
-                ct_cols_bl = list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_bl')]) 
-                ct_cols_followup =list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_m18')])
-                aibl_baseline = df_aibl[ct_cols_bl].values
-                aibl_followup = df_aibl[ct_cols_followup].values
-                print(aibl_baseline.shape)
-                print(aibl_followup.shape)
+            if opt.features == "AAL": # obtain the CT values grouped with ROI atlases
+                ct_cols_bl = list(df.columns[pd.Series(df.columns).str.contains('CT_bl')]) 
+                ct_cols_followup =list(df.columns[pd.Series(df.columns).str.contains('CT_var_tp')])
+                X_train_baseline = sub_list[ct_cols_bl].values[train_split]
+                X_train_followup = sub_list[ct_cols_followup].values[train_split]
+                X_test_baseline = sub_list[ct_cols_bl].values[test_split]
+                X_test_followup = sub_list[ct_cols_followup].values[test_split]
+                print(X_train_baseline.shape)
+                print(X_train_followup.shape)
+                print(X_test_baseline.shape)
+                print(X_test_followup.shape)
+            
+                if opt.replication_study and opt.trajectory == "MMSE":
+                    ct_cols_bl = list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_bl')]) 
+                    ct_cols_followup =list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_m18')])
+                    aibl_baseline = df_aibl[ct_cols_bl].values
+                    aibl_followup = df_aibl[ct_cols_followup].values
+                    print(aibl_baseline.shape)
+                    print(aibl_followup.shape)
         
-        else: # obtain the reduced datasets with feature selection
-            X_train_baseline = np.load("data/{}_bl_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-            X_train_followup = np.load("data/{}_vartp_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-            X_test_baseline = np.load("data/{}_bl_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-            X_test_followup = np.load("data/{}_vartp_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-            print(X_train_baseline.shape)
-            print(X_train_followup.shape)
-            print(X_test_baseline.shape)
-            print(X_test_followup.shape)
-            if opt.replication_study and opt.trajectory == "MMSE":
-                aibl_baseline = np.load("data_replication/{}_bl_cv{}.npy".format(opt.features, i))
-                aibl_followup = np.load("data_replication/{}_vartp_cv{}.npy".format(opt.features, i))
-                print(aibl_baseline.shape)
-                print(aibl_followup.shape)
+            else: # obtain the reduced datasets with feature selection
+                X_train_baseline = np.load("data/{}_bl_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                X_train_followup = np.load("data/{}_vartp_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                X_test_baseline = np.load("data/{}_bl_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                X_test_followup = np.load("data/{}_vartp_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                print(X_train_baseline.shape)
+                print(X_train_followup.shape)
+                print(X_test_baseline.shape)
+                print(X_test_followup.shape)
+                if opt.replication_study and opt.trajectory == "MMSE":
+                    aibl_baseline = np.load("data_replication/{}_bl_cv{}.npy".format(opt.features, i))
+                    aibl_followup = np.load("data_replication/{}_vartp_cv{}.npy".format(opt.features, i))
+                    print(aibl_baseline.shape)
+                    print(aibl_followup.shape)
     
         # load trajectory classes and auxiliary data
         if opt.trajectory == "MMSE":
@@ -185,18 +187,23 @@ if __name__ == "__main__":
                 parameters = {'net_arch': [[25,25], [50,50], [25,25,25], [50,50,50], [25,25,25,25], [50,50,50,50]],
                               'MR_output': [10, 20], 'aux_output': [10, 20], 'lr':[1e-2, 1e-3, 1e-4]}
                 
-                accuracy = 0.0
+                valid_acc = 0.0
+                config_number = 0
+                best_config = -1
                 for arch in parameters['net_arch']:
                     for MR_output in parameters['MR_output']:
                         for aux_output in parameters['aux_output']:
                             for lr in parameters['lr']:
+                                config_number += 1
+                                compute_test = False
+                                
                                 # set the neural network architecture    
                                 net_arch = {'MR_shape':MR_shape,'n_layers':len(arch),'MR_output':MR_output,
                                             'use_aux':True,'aux_shape':4,'aux_output':aux_output,
                                             'output':n_classes,'reg':0.01}
                                 for hidden_layer in range(len(arch)):
                                     net_arch['l{}'.format(hidden_layer+1)] = arch[hidden_layer]
-                                perf_df = pd.DataFrame(columns=['subject_id','label','pred_prob','pred_label'])
+                                perf_df.append({})
                                 print(net_arch)
                                 
                                 tf.reset_default_graph()
@@ -228,44 +235,47 @@ if __name__ == "__main__":
                                         print('End training time: {}\n'.format(cur_time))  
                                     else:
                                         print('train data <-> net_arch check failed')
-                            
-                                    # Test model  (within same session)         
-                                    data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
-                                    if check_data_shapes(data,net_arch):
-                                        print('test data <-> net_arch check passed')   
-                                        _,test_metrics = test_lsn(sess,lsn,data)
                                         
-                                        if opt.replication_study and opt.trajectory == "MMSE":
-                                            aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
-                                            _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
-                                            if test_metrics['test_acc'] > accuracy:
+                                    # Compute test score of the best model
+                                    if train_metrics['valid_acc'][-1] > valid_acc:
+                                        compute_test = True
+                                        valid_acc = train_metrics['valid_acc'][-1]
+                            
+                                        # Test model  (within same session)         
+                                        data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
+                                        if check_data_shapes(data,net_arch):
+                                            print('test data <-> net_arch check passed')   
+                                            _,test_metrics = test_lsn(sess,lsn,data)
+                                            
+                                            # Update test scores
+                                            accuracy = test_metrics["test_acc"]
+                                            y_pred = test_metrics['test_preds']
+                                            y_pred_vector = np.argmax(y_pred, axis=1)
+                                            
+                                            # Update replication study scores
+                                            if opt.replication_study and opt.trajectory == "MMSE":
+                                                aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
+                                                _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
                                                 aibl_accuracy = aibl_metrics['test_acc']
                                                 aibl_pred = aibl_metrics['test_preds']
                                                 aibl_pred_vector = np.argmax(aibl_pred, axis=1)
+                                            
+                                            # populate perf dataframe
+                                            perf_df[-1]['subject_id']  = sub_list['PTID'].values[test_split]
+                                            perf_df[-1]['label'] = np.argmax(y_test,1)
+                                            perf_df[-1]['pred_prob'] = list(test_metrics['test_preds'])
+                                            perf_df[-1]['pred_label'] = np.argmax(test_metrics['test_preds'],1)
+                                            perf_df[-1]['best_config'] = config_number
+                                        else:
+                                            print('test data <-> net_arch check failed')
                                         
-                                        # populate perf dataframe
-                                        perf_df['subject_id']  = df_test['PTID'].values
-                                        perf_df['label'] = np.argmax(y_test,1)
-                                        perf_df['pred_prob'] = list(test_metrics['test_preds'])
-                                        perf_df['pred_label'] = np.argmax(test_metrics['test_preds'],1)
-                                    else:
-                                        print('test data <-> net_arch check failed')
-                                        
-                                # save model stats (accuracy, loss, performance)
-                                with open(opt.out_path + "{}_{}_{}_{}_train_metrics.pkl".format(
-                                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
-                                    pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
-                                with open(opt.out_path + "{}_{}_{}_{}_test_metrics.pkl".format(
-                                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
-                                    pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
-                                perf_df.to_csv(opt.out_path + "{}_{}_{}_{}_perf_df.csv".format(
-                                                opt.features, opt.trajectory, MR_shape, i))
-                                print(perf_df.shape)
-                                
-                                if test_metrics['test_acc'] > accuracy:                        
-                                    accuracy = test_metrics["test_acc"]
-                                    y_pred = test_metrics['test_preds']
-                                    y_pred_vector = np.argmax(y_pred, axis=1)
+                                if compute_test: # save model stats (accuracy, loss, performance)
+                                    with open(opt.out_path + "{}_{}_{}_{}_{}_train_metrics.pkl".format(
+                                            opt.method, opt.features, opt.trajectory, i, config_number), "wb") as f:
+                                                pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
+                                    with open(opt.out_path + "{}_{}_{}_{}_{}_test_metrics.pkl".format(
+                                            opt.method, opt.features, opt.trajectory, i, config_number), "wb") as f:
+                                        pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
                     
             else:
                 # set the neural network architecture    
@@ -273,7 +283,7 @@ if __name__ == "__main__":
                             'use_aux':True,'aux_shape':4,'aux_output':opt.net_arch[-1],'output':n_classes,'reg':0.01}
                 for hidden_layer in range(len(opt.net_arch)-2):
                     net_arch['l{}'.format(hidden_layer+1)] = opt.net_arch[hidden_layer]
-                perf_df = pd.DataFrame(columns=['subject_id','label','pred_prob','pred_label'])
+                perf_df.append({})
                 print(net_arch)
                 
                 tf.reset_default_graph()
@@ -319,23 +329,20 @@ if __name__ == "__main__":
                             aibl_pred_vector = np.argmax(aibl_pred, axis=1)                        
                         
                         # populate perf dataframe
-                        perf_df['subject_id']  = sub_list['PTID'].values[test_split]
-                        perf_df['label'] = np.argmax(y_test,1)
-                        perf_df['pred_prob'] = list(test_metrics['test_preds'])
-                        perf_df['pred_label'] = np.argmax(test_metrics['test_preds'],1)
+                        perf_df[-1]['subject_id']  = sub_list['PTID'].values[test_split]
+                        perf_df[-1]['label'] = np.argmax(y_test,1)
+                        perf_df[-1]['pred_prob'] = list(test_metrics['test_preds'])
+                        perf_df[-1]['pred_label'] = np.argmax(test_metrics['test_preds'],1)
                     else:
                         print('test data <-> net_arch check failed')
                         
                 # save model stats (accuracy, loss, performance)
                 with open(opt.out_path + "{}_{}_{}_{}_train_metrics.pkl".format(
-                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
+                            opt.method, opt.features, opt.trajectory, i), "wb") as f:
                     pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
                 with open(opt.out_path + "{}_{}_{}_{}_test_metrics.pkl".format(
-                            opt.features, opt.trajectory, MR_shape, i), "wb") as f:
+                            opt.method, opt.features, opt.trajectory, i), "wb") as f:
                     pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
-                perf_df.to_csv(opt.out_path + "{}_{}_{}_{}_perf_df.csv".format(
-                                opt.features, opt.trajectory, MR_shape, i))
-                print(perf_df.shape)
                 
                 accuracy = test_metrics["test_acc"]
                 y_pred = test_metrics['test_preds']
@@ -343,12 +350,13 @@ if __name__ == "__main__":
         
         else:
             # train a baseline classifier
-            MR_shape = X_train_baseline.shape[1]
-            train_size = X_train_baseline.shape[0]
-            test_size = X_test_baseline.shape[0]
+            if not opt.no_thickness:
+                MR_shape = X_train_baseline.shape[1]
+                train_size = X_train_baseline.shape[0]
+                test_size = X_test_baseline.shape[0]
+                print(X_train_baseline.shape)
+                print(X_train_followup.shape)
             n_classes = int(np.amax(y_train_vector) + 1)
-            print(X_train_baseline.shape)
-            print(X_train_followup.shape)
             print(X_aux_train.shape)
             
             if opt.no_followup and opt.no_clinical:
@@ -393,8 +401,6 @@ if __name__ == "__main__":
             print(y_test_vector.shape)
             print(X_aux_train.shape)
             print(X_aux_test.shape)
-            print(aibl_test[0])
-            print(aibl_test.shape)
             
             if opt.grid_search:
                 if opt.method == "LR":
@@ -441,6 +447,15 @@ if __name__ == "__main__":
                 aibl_pred = clf.predict_proba(aibl_test)
                 aibl_y = np.zeros((aibl_y_vector.shape[0], int(np.amax(aibl_y_vector)) + 1))
                 aibl_y[np.arange(aibl_y_vector.shape[0]), aibl_y_vector] = 1
+                
+            # populate perf dataframe
+            perf_df.append({})
+            perf_df[-1]['subject_id']  = sub_list['PTID'].values[test_split]
+            perf_df[-1]['label'] = np.argmax(y_test,1)
+            perf_df[-1]['pred_prob'] = list(y_pred)
+            perf_df[-1]['pred_label'] = y_pred_vector
+            if opt.grid_search:
+                perf_df[-1]['best_params'] = clf.best_params_
             
         # compute AUC stats and confusion matrix
         fpr,tpr,_ = roc_curve(y_test.ravel(), y_pred.ravel())
@@ -490,20 +505,22 @@ if __name__ == "__main__":
     if opt.replication_study and opt.trajectory == 'MMSE':
         fpr,tpr,_ = roc_curve(aibl_test_combined.ravel(), aibl_pred_combined.ravel())
         aibl_roc_stats = {'fpr': fpr, 'tpr': tpr}
+        print(aibl_perf)
     
     print(perf)
-    print(aibl_perf)
         
     # save ROC stats and confusion matrix
     prefix = "{}_{}_{}_{}_".format(opt.method, opt.features, opt.trajectory, opt.n_features)
-    prefix = prefix + "no_clinical_" if opt.no_clinical else prefix
-    prefix = prefix + "no_followup_" if opt.no_followup else prefix
-    prefix = prefix + "no_thickness_" if opt.no_thickness else prefix
-    prefix = prefix + "grid_search_" if opt.grid_search else prefix
+    prefix = prefix + "NoClinical_" if opt.no_clinical else prefix
+    prefix = prefix + "NoFollowup_" if opt.no_followup else prefix
+    prefix = prefix + "NoThickness_" if opt.no_thickness else prefix
+    prefix = prefix + "GridSearch_" if opt.grid_search else prefix
     with open(opt.out_path + prefix + "roc_stats.pkl", "wb") as f:
         pickle.dump(roc_stats, f, pickle.HIGHEST_PROTOCOL)
     with open(opt.out_path + prefix + "cmatrix.pkl", "wb") as f:
         pickle.dump(cmatrix, f, pickle.HIGHEST_PROTOCOL)
+    with open(opt.out_path + prefix + "perf_df.pkl", "wb") as f:
+        pickle.dump(perf_df, f, pickle.HIGHEST_PROTOCOL)
     
     # save cross-validation model performance
     with open(opt.out_path + "model_performance.csv", "a") as f:
@@ -526,10 +543,10 @@ if __name__ == "__main__":
     # save AIBL replication study performance
     if opt.replication_study and opt.trajectory == 'MMSE':
         prefix = "{}_{}_{}_{}_".format(opt.method, opt.features, opt.trajectory, opt.n_features)
-        prefix = prefix + "no_clinical_" if opt.no_clinical else prefix
-        prefix = prefix + "no_followup_" if opt.no_followup else prefix
-        prefix = prefix + "no_thickness_" if opt.no_thickness else prefix
-        prefix = prefix + "grid_search_" if opt.grid_search else prefix
+        prefix = prefix + "NoClinical_" if opt.no_clinical else prefix
+        prefix = prefix + "NoFollowup_" if opt.no_followup else prefix
+        prefix = prefix + "NoThickness_" if opt.no_thickness else prefix
+        prefix = prefix + "GridSearch_" if opt.grid_search else prefix
         with open(opt.out_path + prefix + "aibl_roc_stats.pkl", "wb") as f:
             pickle.dump(aibl_roc_stats, f, pickle.HIGHEST_PROTOCOL)
         with open(opt.out_path + prefix + "aibl_cmatrix.pkl", "wb") as f:
