@@ -9,7 +9,7 @@ from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import accuracy_score, roc_curve, auc, confusion_matrix
+from sklearn.metrics import balanced_accuracy_score, roc_curve, auc, confusion_matrix
 
 import time
 from datetime import datetime
@@ -82,10 +82,6 @@ if __name__ == "__main__":
         test_split = splits[opt.trajectory]["test"][i]
         sub_list = df[df["STATUS"].isin(["OK", "PrevTP", "New"])]
         sub_list = sub_list.reset_index(drop=True)
-        print(sub_list.shape)
-        print(df.shape)
-        print(len(train_split))
-        print(len(test_split))
         
         if opt.replication_study: # load the AIBL replication data
             df_aibl = pd.read_csv("AIBL_replication_data.csv")
@@ -99,33 +95,21 @@ if __name__ == "__main__":
                 X_train_followup = sub_list[ct_cols_followup].values[train_split]
                 X_test_baseline = sub_list[ct_cols_bl].values[test_split]
                 X_test_followup = sub_list[ct_cols_followup].values[test_split]
-                print(X_train_baseline.shape)
-                print(X_train_followup.shape)
-                print(X_test_baseline.shape)
-                print(X_test_followup.shape)
             
                 if opt.replication_study and opt.trajectory == "MMSE":
                     ct_cols_bl = list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_bl')]) 
                     ct_cols_followup =list(df_aibl.columns[pd.Series(df_aibl.columns).str.contains('CT_m18')])
                     aibl_baseline = df_aibl[ct_cols_bl].values
                     aibl_followup = df_aibl[ct_cols_followup].values
-                    print(aibl_baseline.shape)
-                    print(aibl_followup.shape)
         
             else: # obtain the reduced datasets with feature selection
                 X_train_baseline = np.load("data/{}_bl_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
                 X_train_followup = np.load("data/{}_vartp_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
                 X_test_baseline = np.load("data/{}_bl_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
                 X_test_followup = np.load("data/{}_vartp_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-                print(X_train_baseline.shape)
-                print(X_train_followup.shape)
-                print(X_test_baseline.shape)
-                print(X_test_followup.shape)
                 if opt.replication_study and opt.trajectory == "MMSE":
                     aibl_baseline = np.load("data_replication/{}_bl_cv{}.npy".format(opt.features, i))
                     aibl_followup = np.load("data_replication/{}_vartp_cv{}.npy".format(opt.features, i))
-                    print(aibl_baseline.shape)
-                    print(aibl_followup.shape)
     
         # load trajectory classes and auxiliary data
         if opt.trajectory == "MMSE":
@@ -137,18 +121,12 @@ if __name__ == "__main__":
             if opt.replication_study:
                 aibl_aux = df_aibl[["APOE4", "AGE", "MMSE_bl", "MMSE_m18"]].values
                 aibl_y_vector = df_aibl["traj"].values
-                print(aibl_aux.shape)
-                print(aibl_y_vector.shape)
             
         elif opt.trajectory == "ADAS13":
             y_train_vector = sub_list["ADAS_3c_traj"].values[train_split]
             y_test_vector = sub_list["ADAS_3c_traj"].values[test_split]
             X_aux_train = sub_list[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values[train_split]
             X_aux_test = sub_list[["APOE4", "AGE", "ADAS13_bl", "ADAS13_var_tp"]].values[test_split]
-        print(y_train_vector.shape)
-        print(y_test_vector.shape)
-        print(X_aux_train.shape)
-        print(X_aux_test.shape)
             
         if opt.verbose:
             delta_t = time.time() - start_time
@@ -169,19 +147,11 @@ if __name__ == "__main__":
             y_train[np.arange(train_size), y_train_vector] = 1
             y_test = np.zeros((test_size, n_classes))
             y_test[np.arange(test_size), y_test_vector] = 1
-            print(X_MR_train.shape)
-            print(X_MR_test.shape)
-            print(y_train.shape)
-            print(y_test.shape)
-            print(X_aux_train.shape)
-            print(X_aux_test.shape)
             
             if opt.replication_study and opt.trajectory == "MMSE":
                 aibl_MR = np.stack((aibl_baseline, aibl_followup), axis=1)
                 aibl_y = np.zeros((aibl_baseline.shape[0], n_classes))
                 aibl_y[np.arange(aibl_baseline.shape[0]), aibl_y_vector] = 1
-                print(aibl_MR.shape)
-                print(aibl_y.shape)
             
             if opt.grid_search:
                 parameters = {'net_arch': [[25,25], [50,50], [25,25,25], [50,50,50], [25,25,25,25], [50,50,50,50]],
@@ -344,7 +314,7 @@ if __name__ == "__main__":
                             opt.method, opt.features, opt.trajectory, i), "wb") as f:
                     pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
                 
-                accuracy = test_metrics["test_acc"]
+                accuracy = test_metrics["test_balanced_acc"]
                 y_pred = test_metrics['test_preds']
                 y_pred_vector = np.argmax(y_pred, axis=1)
         
@@ -354,10 +324,7 @@ if __name__ == "__main__":
                 MR_shape = X_train_baseline.shape[1]
                 train_size = X_train_baseline.shape[0]
                 test_size = X_test_baseline.shape[0]
-                print(X_train_baseline.shape)
-                print(X_train_followup.shape)
             n_classes = int(np.amax(y_train_vector) + 1)
-            print(X_aux_train.shape)
             
             if opt.no_followup and opt.no_clinical:
                 X_train = X_train_baseline
@@ -394,56 +361,49 @@ if __name__ == "__main__":
                 X_test = np.concatenate((X_test_baseline, X_test_followup, X_aux_test), axis=1)
                 if opt.replication_study and opt.trajectory == 'MMSE':
                     aibl_test = np.concatenate((aibl_baseline, aibl_followup, aibl_aux), axis=1)
-                
-            print(X_train.shape)
-            print(X_test.shape)
-            print(y_train_vector.shape)
-            print(y_test_vector.shape)
-            print(X_aux_train.shape)
-            print(X_aux_test.shape)
             
             if opt.grid_search:
                 if opt.method == "LR":
                     parameters = {'C': [1e-3, 3e-2, 1e-2, 3e-1, 1e-1, 1, 1e1, 1e2]}
-                    lr = LogisticRegression(solver="lbfgs", multi_class="multinomial", verbose=opt.verbose)    
-                    clf = GridSearchCV(lr, parameters, cv=5)
+                    lr = LogisticRegression(solver="lbfgs", multi_class="multinomial", class_weight='balanced')    
+                    clf = GridSearchCV(lr, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
                 if opt.method == "SVM":
                     parameters = {'kernel': ['linear', 'rbf'], 'C': [1e-3, 1e-2, 1e-1, 1, 1e1, 1e2]}
-                    svc = SVC(gamma="scale", probability=True, verbose=opt.verbose)
-                    clf = GridSearchCV(svc, parameters, cv=5)
+                    svc = SVC(gamma="scale", probability=True, class_weight='balanced')
+                    clf = GridSearchCV(svc, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
                 if opt.method == "RF":
                     parameters = {'n_estimators': [25, 50, 100, 150], 'min_samples_split': [2, 4, 8]}
-                    rf = RandomForestClassifier(verbose=opt.verbose)
-                    clf = GridSearchCV(rf, parameters, cv=5)
+                    rf = RandomForestClassifier(class_weight='balanced')
+                    clf = GridSearchCV(rf, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
                 if opt.method == "ANN": # same parameters as the LSN
                     parameters = {'hidden_layer_sizes': [[25,25], [50,50], [25,25,25], [50,50,50],
                                                          [25,25,25,25], [50,50,50,50]], 
                                   'learning_rate_init': [1e-2, 1e-3, 1e-4]}
-                    ann = MLPClassifier(verbose=opt.verbose, batch_size=opt.batch_size, alpha=0.01)
-                    clf = GridSearchCV(ann, parameters, cv=5)
+                    ann = MLPClassifier(class_weight='balanced', batch_size=opt.batch_size, alpha=0.01)
+                    clf = GridSearchCV(ann, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
             else:
                 if opt.method == "LR":
-                    clf = LogisticRegression(solver="lbfgs", multi_class="multinomial", verbose=opt.verbose)      
+                    clf = LogisticRegression(solver="lbfgs", multi_class="multinomial", class_weight='balanced')      
                 if opt.method == "SVM":
-                    clf = SVC(gamma="scale", probability=True, verbose=opt.verbose) 
+                    clf = SVC(gamma="scale", probability=True, class_weight='balanced') 
                 if opt.method == "RF":
-                    clf = RandomForestClassifier(n_estimators=100, verbose=opt.verbose)
+                    clf = RandomForestClassifier(n_estimators=100, class_weight='balanced')
                 if opt.method == "ANN": # same parameters as the LSN
                     hidden_layer_sizes = opt.net_arch[:-2]
-                    clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, alpha=0.01, verbose=opt.verbose, 
+                    clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, alpha=0.01, class_weight='balanced', 
                                         learning_rate_init=opt.lr, batch_size=opt.batch_size)
                                                
             # fit and score the classifier                                
             clf.fit(X_train, y_train_vector)
             y_pred_vector = clf.predict(X_test)
-            accuracy = accuracy_score(y_test_vector, y_pred_vector)
+            accuracy = balanced_accuracy_score(y_test_vector, y_pred_vector)
             y_pred = clf.predict_proba(X_test)
             y_test = np.zeros((y_test_vector.shape[0], int(np.amax(y_test_vector)) + 1))
             y_test[np.arange(y_test_vector.shape[0]), y_test_vector] = 1
             
             if opt.replication_study and opt.trajectory == 'MMSE':
                 aibl_pred_vector = clf.predict(aibl_test)
-                aibl_accuracy = accuracy_score(aibl_y_vector, aibl_pred_vector)
+                aibl_accuracy = balanced_accuracy_score(aibl_y_vector, aibl_pred_vector)
                 aibl_pred = clf.predict_proba(aibl_test)
                 aibl_y = np.zeros((aibl_y_vector.shape[0], int(np.amax(aibl_y_vector)) + 1))
                 aibl_y[np.arange(aibl_y_vector.shape[0]), aibl_y_vector] = 1
@@ -469,7 +429,7 @@ if __name__ == "__main__":
         # compute subgroup analysis (edge-cases vs cognitively consistent)
         for sg in ["BE", "FE", "CC"]:
             ind = np.where(sub_list["{}_gr".format(opt.trajectory)].values[test_split] == sg)[0]
-            acc_sg = accuracy_score(y_test_vector[ind], y_pred_vector[ind])
+            acc_sg = balanced_accuracy_score(y_test_vector[ind], y_pred_vector[ind])
             fpr_sg,tpr_sg,_ = roc_curve(y_test[ind,:].ravel(), y_pred[ind,:].ravel())
             roc_auc_sg = auc(fpr_sg, tpr_sg)
             

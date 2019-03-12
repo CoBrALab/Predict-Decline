@@ -6,8 +6,9 @@ Created on Wed June  8, 2018
 
 # Package imports
 import tensorflow as tf
-import numpy as np
 import time
+import numpy as np
+from sklearn.metrics import balanced_accuracy_score
 
 # Main slim library
 slim = tf.contrib.slim
@@ -34,7 +35,6 @@ class siamese_net(object):
         self.preds = self.get_predictions(net_arch)
         self.loss = self.get_loss()
         self.accuracy = self.get_accuracy()
-        self.auc = self.get_auc()
 
     # Individual branch    
     def mlpnet_slim(self, X, net_arch):
@@ -114,11 +114,6 @@ class siamese_net(object):
     def get_accuracy(self):
         correct_preds = tf.equal(tf.argmax(self.labels,1), tf.argmax(self.preds,1))
         return tf.reduce_mean(tf.cast(correct_preds, tf.float32))
-        
-    # Get method for AUC metric
-    def get_auc(self):
-        auc_value,_ = tf.metrics.auc(self.labels, self.preds)
-        return auc_value
     
 # Other helper functions
 def next_batch(s,e,mr_inputs,aux_inputs,labels):
@@ -260,8 +255,12 @@ def test_lsn(sess,lsn,data):
     test_acc = lsn.accuracy.eval(feed_dict={lsn.input_L:X_MR_test[:,0,:],lsn.input_R:X_MR_test[:,1,:],
                                        lsn.aux_gen:X_aux_test[:,0:1],lsn.aux_clinical:X_aux_test[:,1:],
                                        lsn.labels:y_test})
+                                       
+    pred_labels = np.argmax(test_preds, axis=1)
+    test_balanced_acc = balanced_accuracy_score(np.argmax(y_test, axis=1), pred_labels)
 
     test_metrics = {'test_feature_L':test_feature_L,'test_feature_R':test_feature_R,'test_preds':test_preds,
-                    'test_acc':test_acc}
+                    'test_acc':test_acc, 'test_balanced_acc':test_balanced_acc}
     print('Accuracy test set %0.2f' % (100 * test_acc))
+    print('Balanced accuracy test set %0.2f' % (100 * test_balanced_acc))
     return lsn, test_metrics
