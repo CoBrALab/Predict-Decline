@@ -368,8 +368,11 @@ if __name__ == "__main__":
                     lr = LogisticRegression(solver='liblinear', multi_class='auto', class_weight='balanced')    
                     clf = GridSearchCV(lr, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
                 if opt.method == "SVM":
-                    parameters = {'kernel': ['linear', 'poly', 'rbf', 'sigmoid'], 
-                                  'C': [1e-3, 3e-2, 1e-2, 3e-1, 1e-1, 1, 1e1, 1e2]}
+                    parameters = {'C': [1e-3, 3e-2, 1e-2, 3e-1, 1e-1, 1, 1e1, 1e2]}
+                    if opt.features == "PCA":
+                        parameters['kernel'] = ['rbf', 'sigmoid']
+                    else:
+                        parameters['kernel'] = ['linear', 'poly', 'rbf', 'sigmoid']
                     svc = SVC(gamma="scale", probability=True, class_weight='balanced')
                     clf = GridSearchCV(svc, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
                 if opt.method == "RF":
@@ -381,9 +384,10 @@ if __name__ == "__main__":
                 if opt.method == "ANN": # same parameters as the LSN
                     parameters = {'hidden_layer_sizes': [[25,25], [50,50], [25,25,25], [50,50,50],
                                                          [25,25,25,25], [50,50,50,50]], 
-                                  'learning_rate_init': [1e-2, 1e-3, 1e-4], 'activation': ['logistic', 'relu']}
-                    ann = MLPClassifier(batch_size=opt.batch_size, alpha=0.01)
+                                  'learning_rate_init': [1e-2, 1e-3, 1e-4]}
+                    ann = MLPClassifier(batch_size=opt.batch_size, alpha=0.01, max_iter=100)
                     clf = GridSearchCV(ann, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
+                    
             else:
                 if opt.method == "LR":
                     clf = LogisticRegression(solver='liblinear', multi_class='auto', class_weight='balanced')      
@@ -393,9 +397,9 @@ if __name__ == "__main__":
                     clf = RandomForestClassifier(n_estimators=100, class_weight='balanced')
                 if opt.method == "ANN": # same parameters as the LSN
                     hidden_layer_sizes = opt.net_arch[:-2]
-                    clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, alpha=0.01, 
+                    clf = MLPClassifier(hidden_layer_sizes=hidden_layer_sizes, alpha=0.01, max_iter=100, 
                                         learning_rate_init=opt.lr, batch_size=opt.batch_size)
-                                               
+            
             # fit and score the classifier                                
             clf.fit(X_train, y_train_vector)
             y_pred_vector = clf.predict(X_test)
