@@ -11,11 +11,13 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import balanced_accuracy_score, roc_curve, auc, confusion_matrix
 
+import os
 import time
+import pickle
+import random
 from datetime import datetime
 from argparse import ArgumentParser
-import os
-import pickle
+
 
 from lsn import *
 
@@ -154,98 +156,99 @@ if __name__ == "__main__":
                 aibl_y[np.arange(aibl_baseline.shape[0]), aibl_y_vector] = 1
             
             if opt.grid_search:
-                parameters = {'net_arch': [[25,25], [50,50], [25,25,25], [50,50,50], [25,25,25,25], [50,50,50,50]],
-                              'MR_output': [10, 20], 'aux_output': [10, 20], 'lr':[1e-2, 1e-3, 1e-4]}
+                layer_sizes = [[25,25,25,25,10,10], [50,50,50,50,10,10], [25,25,25,25,20,10], [50,50,50,50,20,10],
+                               [25,25,25,25,10,20], [50,50,50,50,10,20], [25,25,25,25,20,20], [50,50,50,50,20,20]]
                 
-                valid_acc = 0.0
+                best_valid_acc = 0.0
                 config_number = 0
-                best_config = -1
-                for arch in parameters['net_arch']:
-                    for MR_output in parameters['MR_output']:
-                        for aux_output in parameters['aux_output']:
-                            for lr in parameters['lr']:
-                                config_number += 1
-                                compute_test = False
+                for lsz in layer_sizes:
+                    config_number += 1
+                    compute_test = False
+                    
+                    # set the neural network architecture    
+                    net_arch = {'MR_shape':MR_shape,'n_layers':len(lsz)-2,'MR_output':lsz[-2],
+                                'use_aux':True,'aux_shape':4,'aux_output':lsz[-1],'output':n_classes,'reg':0.01}
+                    for hidden_layer in range(len(lsz)-2):
+                        net_arch['l{}'.format(hidden_layer+1)] = lsz[hidden_layer]
+                    perf_df.append({})
+                    print(net_arch)
+                    
+                    valid_acc = np.zeros(5)
+                    for cv_iter in range(5): # do 5 cross-validation folds
+                        inds = list(range(X_MR_train.shape[0]))
+                        random.shuffle(inds)
+                        X_MR_train = X_MR_train[inds]
+                        X_aux_train = X_aux_train[inds]
+                        y_train = y_train[inds]                    
+                    
+                        tf.reset_default_graph()
+                        with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
+                    
+                            # ----------------------Train model    -------------------------------
+                            data = {'X_MR':X_MR_train,'X_aux':X_aux_train,'y':y_train}    
+                            if check_data_shapes(data,net_arch):      
+                                print('train data <-> net_arch check passed')
                                 
-                                # set the neural network architecture    
-                                net_arch = {'MR_shape':MR_shape,'n_layers':len(arch),'MR_output':MR_output,
-                                            'use_aux':True,'aux_shape':4,'aux_output':aux_output,
-                                            'output':n_classes,'reg':0.01}
-                                for hidden_layer in range(len(arch)):
-                                    net_arch['l{}'.format(hidden_layer+1)] = arch[hidden_layer]
-                                perf_df.append({})
-                                print(net_arch)
-                                
-                                tf.reset_default_graph()
-                                with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
-                                
-                                    # ----------------------Train model    -------------------------------
-                                    data = {'X_MR':X_MR_train,'X_aux':X_aux_train,'y':y_train}    
-                                    if check_data_shapes(data,net_arch):      
-                                        print('train data <-> net_arch check passed')  
-                                        lsn = siamese_net(net_arch)        
-                                        optimizer = tf.train.AdamOptimizer(learning_rate = opt.lr).minimize(lsn.loss)
-                                        
-                                        tf.global_variables_initializer().run()
-                                        saver = tf.train.Saver()
-                                        
-                                        cur_time = datetime.time(datetime.now())
-                                        print('\nStart training time: {}'.format(cur_time))                
-                                        lsn, train_metrics = train_lsn(sess, lsn, data, optimizer, opt.n_epochs, 
-                                                                       opt.batch_size, opt.dropout, 
-                                                                       opt.validate_after, opt.verbose)
-                                        
-                                        # Save trained model 
-                                        if opt.save_model:
-                                            filename = "{}_{}_{}_{}".format(opt.features,opt.trajectory,MR_shape,i)
-                                            print('saving model at {}'.format("models/" + filename))
-                                            saver.save(sess, "models/" + filename)
-                                        
-                                        cur_time = datetime.time(datetime.now())
-                                        print('End training time: {}\n'.format(cur_time))  
-                                    else:
-                                        print('train data <-> net_arch check failed')
-                                        
-                                    # Compute test score of the best model
-                                    if train_metrics['valid_acc'][-1] > valid_acc:
-                                        compute_test = True
-                                        valid_acc = train_metrics['valid_acc'][-1]
+                                lsn = siamese_net(net_arch)        
+                                optimizer = tf.train.AdamOptimizer(learning_rate = opt.lr).minimize(lsn.loss)
                             
-                                        # Test model  (within same session)         
-                                        data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
-                                        if check_data_shapes(data,net_arch):
-                                            print('test data <-> net_arch check passed')   
-                                            _,test_metrics = test_lsn(sess,lsn,data)
-                                            
-                                            # Update test scores
-                                            accuracy = test_metrics["test_balanced_acc"]
-                                            y_pred = test_metrics['test_preds']
-                                            y_pred_vector = np.argmax(y_pred, axis=1)
-                                            
-                                            # Update replication study scores
-                                            if opt.replication_study and opt.trajectory == "MMSE":
-                                                aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
-                                                _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
-                                                aibl_accuracy = aibl_metrics['test_acc']
-                                                aibl_pred = aibl_metrics['test_preds']
-                                                aibl_pred_vector = np.argmax(aibl_pred, axis=1)
-                                            
-                                            # populate perf dataframe
-                                            perf_df[-1]['subject_id']  = sub_list['PTID'].values[test_split]
-                                            perf_df[-1]['label'] = np.argmax(y_test,1)
-                                            perf_df[-1]['pred_prob'] = list(test_metrics['test_preds'])
-                                            perf_df[-1]['pred_label'] = np.argmax(test_metrics['test_preds'],1)
-                                            perf_df[-1]['best_config'] = config_number
-                                        else:
-                                            print('test data <-> net_arch check failed')
-                                        
-                                if compute_test: # save model stats (accuracy, loss, performance)
-                                    with open(opt.out_path + "{}_{}_{}_{}_{}_train_metrics.pkl".format(
-                                            opt.method, opt.features, opt.trajectory, i, config_number), "wb") as f:
-                                                pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
-                                    with open(opt.out_path + "{}_{}_{}_{}_{}_test_metrics.pkl".format(
-                                            opt.method, opt.features, opt.trajectory, i, config_number), "wb") as f:
-                                        pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
+                                tf.global_variables_initializer().run()
+                                saver = tf.train.Saver()
+                            
+                                cur_time = datetime.time(datetime.now())
+                                print('\nStart training time: {}'.format(cur_time))
+                            
+                                lsn, train_metrics = train_lsn(sess, lsn, data, optimizer, opt.n_epochs, 
+                                                               opt.batch_size, opt.dropout, 
+                                                               opt.validate_after, opt.verbose)
+                                valid_acc[cv_iter] = train_metrics['valid_acc'][-1]
+                            
+                                cur_time = datetime.time(datetime.now())
+                                print('End training time, fold {}: {}\n'.format(cv_iter, cur_time))
+                            else:
+                                print('train data <-> net_arch check failed')
+                            
+                            # Compute test score of the best model
+                            if cv_iter == 4 and np.mean(valid_acc) > best_valid_acc:
+                                compute_test = True
+                                best_valid_acc = np.mean(valid_acc)
+                    
+                                # Test model  (within same session)         
+                                data = {'X_MR':X_MR_test,'X_aux':X_aux_test,'y':y_test}
+                                if check_data_shapes(data,net_arch):
+                                    print('test data <-> net_arch check passed')   
+                                    _,test_metrics = test_lsn(sess,lsn,data)
+                                    
+                                    # Update test scores
+                                    accuracy = test_metrics["test_balanced_acc"]
+                                    y_pred = test_metrics['test_preds']
+                                    y_pred_vector = np.argmax(y_pred, axis=1)
+                                    
+                                    # Update replication study scores
+                                    if opt.replication_study and opt.trajectory == "MMSE":
+                                        aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
+                                        _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
+                                        aibl_accuracy = aibl_metrics['test_acc']
+                                        aibl_pred = aibl_metrics['test_preds']
+                                        aibl_pred_vector = np.argmax(aibl_pred, axis=1)
+                                    
+                                    # populate perf dataframe
+                                    perf_df[-1]['subject_id']  = sub_list['PTID'].values[test_split]
+                                    perf_df[-1]['label'] = np.argmax(y_test,1)
+                                    perf_df[-1]['pred_prob'] = list(test_metrics['test_preds'])
+                                    perf_df[-1]['pred_label'] = np.argmax(test_metrics['test_preds'],1)
+                                    perf_df[-1]['best_config'] = config_number
+                                    time.sleep(2)
+                                else:
+                                    print('test data <-> net_arch check failed')
+                            
+                    if compute_test: # save model stats (accuracy, loss, performance)
+                        with open(opt.out_path + "{}_{}_{}_{}_{}_train_metrics.pkl".format(
+                                opt.method, opt.features, opt.trajectory, i, config_number), "wb") as f:
+                                    pickle.dump(train_metrics, f, pickle.HIGHEST_PROTOCOL)
+                        with open(opt.out_path + "{}_{}_{}_{}_{}_test_metrics.pkl".format(
+                                opt.method, opt.features, opt.trajectory, i, config_number), "wb") as f:
+                            pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
                     
             else:
                 # set the neural network architecture    
