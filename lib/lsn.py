@@ -149,17 +149,17 @@ def check_data_shapes(data,net_arch):
     return check
   
 # Train and test defs
-def train_lsn(sess, lsn, data, optimizer, n_epochs, batch_size, dropout, validate_after, verbose):
-    valid_frac = int(0.1*len(data['y']))
+def train_lsn(sess, lsn, data, train_ind, valid_ind, optimizer, 
+              n_epochs, batch_size, dropout, validate_after, verbose):
     
     # Split into train and valid data for hyperparam tuning
-    X_MR_train = data['X_MR'][:1-valid_frac]
-    X_aux_train = data['X_aux'][:1-valid_frac]
-    y_train = data['y'][:1-valid_frac]
+    X_MR_train = data['X_MR'][train_ind]
+    X_aux_train = data['X_aux'][train_ind]
+    y_train = data['y'][train_ind]
 
-    X_MR_valid = data['X_MR'][1-valid_frac:]
-    X_aux_valid = data['X_aux'][1-valid_frac:]
-    y_valid = data['y'][1-valid_frac:]
+    X_MR_valid = data['X_MR'][valid_ind]
+    X_aux_valid = data['X_aux'][valid_ind]
+    y_valid = data['y'][valid_ind]
 
     total_batch = int(len(y_train)/batch_size)
     #print('total_batch {}'.format(total_batch))

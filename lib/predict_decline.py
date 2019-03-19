@@ -8,8 +8,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.metrics import balanced_accuracy_score, roc_curve, auc, confusion_matrix
+from sklearn.model_selection import GridSearchCV, PredefinedSplit
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_curve, auc, confusion_matrix
 
 import os
 import time
@@ -58,15 +58,15 @@ if __name__ == "__main__":
     opt = parser.parse_args()
     
     # performance metrics to be measured
-    perf = {'acc': [], 'auc': [], 'acc_BE': [], 'auc_BE': [], 
-            'acc_FE': [], 'auc_FE': [], 'acc_CC': [], 'auc_CC': []}
+    perf = {'acc': [], 'bacc': [], 'auc': [], 'acc_BE': [], 'bacc_BE': [], 'auc_BE': [], 
+            'acc_FE': [], 'bacc_FE': [], 'auc_FE': [], 'acc_CC': [], 'bacc_CC': [], 'auc_CC': []}
     cmatrix = {'all': [], 'BE': [], 'FE': [], 'CC': []}
     y_pred_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
     y_test_combined = {'all': np.array([]), 'BE': np.array([]), 'FE': np.array([]), 'CC': np.array([])}
     perf_df = []
     
     if opt.replication_study and opt.trajectory == 'MMSE':
-        aibl_perf = {'acc': [], 'auc': []}
+        aibl_perf = {'acc': [], 'bacc': [], 'auc': []}
         aibl_cmatrix = []
         aibl_pred_combined = np.array([])
         aibl_test_combined = np.array([])
@@ -82,7 +82,7 @@ if __name__ == "__main__":
         splits = pd.read_pickle("train_test_splits.pkl")
         train_split = splits[opt.trajectory]["train"][i]
         test_split = splits[opt.trajectory]["test"][i]
-        sub_list = df[df["STATUS"].isin(["OK", "PrevTP", "New"])]
+        sub_list = df[df["STATUS"].isin(["OK", "Add", "New"])]
         sub_list = sub_list.reset_index(drop=True)
         
         if opt.replication_study: # load the AIBL replication data
@@ -161,6 +161,8 @@ if __name__ == "__main__":
                 
                 best_valid_acc = 0.0
                 config_number = 0
+                ps = np.array(pd.read_pickle("predefined_splits.pkl")[opt.trajectory][i])          
+                
                 for lsz in layer_sizes:
                     config_number += 1
                     compute_test = False
@@ -173,13 +175,16 @@ if __name__ == "__main__":
                     perf_df.append({})
                     print(net_arch)
                     
-                    valid_acc = np.zeros(5)
-                    for cv_iter in range(5): # do 5 cross-validation folds
+                    valid_acc = np.zeros(opt.n_iterations)
+                    for cv_iter in range(opt.n_iterations): # do 5 cross-validation folds
                         inds = list(range(X_MR_train.shape[0]))
                         random.shuffle(inds)
                         X_MR_train = X_MR_train[inds]
                         X_aux_train = X_aux_train[inds]
-                        y_train = y_train[inds]                    
+                        y_train = y_train[inds]
+                        
+                        train_ind = np.where(ps != cv_iter)[0]
+                        valid_ind = np.where(ps == cv_iter)[0]
                     
                         tf.reset_default_graph()
                         with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
@@ -198,9 +203,9 @@ if __name__ == "__main__":
                                 cur_time = datetime.time(datetime.now())
                                 print('\nStart training time: {}'.format(cur_time))
                             
-                                lsn, train_metrics = train_lsn(sess, lsn, data, optimizer, opt.n_epochs, 
-                                                               opt.batch_size, opt.dropout, 
-                                                               opt.validate_after, opt.verbose)
+                                lsn, train_metrics = train_lsn(sess, lsn, data, train_ind, valid_ind,
+                                                               optimizer, opt.n_epochs, opt.batch_size, 
+                                                               opt.dropout, opt.validate_after, opt.verbose)
                                 valid_acc[cv_iter] = train_metrics['valid_acc'][-1]
                             
                                 cur_time = datetime.time(datetime.now())
@@ -220,7 +225,8 @@ if __name__ == "__main__":
                                     _,test_metrics = test_lsn(sess,lsn,data)
                                     
                                     # Update test scores
-                                    accuracy = test_metrics["test_balanced_acc"]
+                                    accuracy = test_metrics['test_acc']
+                                    balanced_accuracy = test_metrics['test_balanced_acc']
                                     y_pred = test_metrics['test_preds']
                                     y_pred_vector = np.argmax(y_pred, axis=1)
                                     
@@ -229,6 +235,7 @@ if __name__ == "__main__":
                                         aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
                                         _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
                                         aibl_accuracy = aibl_metrics['test_acc']
+                                        aibl_balanced_accuracy = aibl_metrics['test_balanced_acc']
                                         aibl_pred = aibl_metrics['test_preds']
                                         aibl_pred_vector = np.argmax(aibl_pred, axis=1)
                                     
@@ -238,7 +245,6 @@ if __name__ == "__main__":
                                     perf_df[-1]['pred_prob'] = list(test_metrics['test_preds'])
                                     perf_df[-1]['pred_label'] = np.argmax(test_metrics['test_preds'],1)
                                     perf_df[-1]['best_config'] = config_number
-                                    time.sleep(2)
                                 else:
                                     print('test data <-> net_arch check failed')
                             
@@ -298,6 +304,7 @@ if __name__ == "__main__":
                             aibl_data = {'X_MR': aibl_MR, 'X_aux': aibl_aux, 'y': aibl_y}
                             _, aibl_metrics = test_lsn(sess, lsn, aibl_data)
                             aibl_accuracy = aibl_metrics['test_acc']
+                            aibl_balanced_accuracy = aibl_metrics['test_balanced_acc']
                             aibl_pred = aibl_metrics['test_preds']
                             aibl_pred_vector = np.argmax(aibl_pred, axis=1)                        
                         
@@ -317,7 +324,8 @@ if __name__ == "__main__":
                             opt.method, opt.features, opt.trajectory, i), "wb") as f:
                     pickle.dump(test_metrics, f, pickle.HIGHEST_PROTOCOL)
                 
-                accuracy = test_metrics["test_balanced_acc"]
+                accuracy = test_metrics['test_acc']                
+                balanced_accuracy = test_metrics['test_balanced_acc']
                 y_pred = test_metrics['test_preds']
                 y_pred_vector = np.argmax(y_pred, axis=1)
         
@@ -366,6 +374,8 @@ if __name__ == "__main__":
                     aibl_test = np.concatenate((aibl_baseline, aibl_followup, aibl_aux), axis=1)
             
             if opt.grid_search:
+                ps = PredefinedSplit(pd.read_pickle("predefined_splits.pkl")[opt.trajectory][i])
+                print(pd.read_pickle("predefined_splits.pkl")[opt.trajectory][i])
                 if opt.method == "LR":
                     parameters = {'penalty': ['l1', 'l2'], 'C': [1e-3, 3e-2, 1e-2, 3e-1, 1e-1, 1, 1e1, 1e2]}
                     lr = LogisticRegression(solver='liblinear', multi_class='auto', class_weight='balanced')    
@@ -377,19 +387,19 @@ if __name__ == "__main__":
                     else:
                         parameters['kernel'] = ['linear', 'poly', 'rbf', 'sigmoid']
                     svc = SVC(gamma="scale", probability=True, class_weight='balanced')
-                    clf = GridSearchCV(svc, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
+                    clf = GridSearchCV(svc, parameters, cv=ps, scoring='balanced_accuracy', refit='balanced_accuracy')
                 if opt.method == "RF":
                     parameters = {'criterion': ['gini', 'entropy'],
                                   'min_samples_split': [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2],
                                   'min_impurity_decrease': [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]}
                     rf = RandomForestClassifier(n_estimators=100, class_weight='balanced', min_impurity_split=0)
-                    clf = GridSearchCV(rf, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
+                    clf = GridSearchCV(rf, parameters, cv=ps, scoring='balanced_accuracy', refit='balanced_accuracy')
                 if opt.method == "ANN": # same parameters as the LSN
                     parameters = {'hidden_layer_sizes': [[25,25], [50,50], [25,25,25], [50,50,50],
                                                          [25,25,25,25], [50,50,50,50]], 
                                   'learning_rate_init': [1e-2, 1e-3, 1e-4]}
                     ann = MLPClassifier(batch_size=opt.batch_size, alpha=0.01, max_iter=100)
-                    clf = GridSearchCV(ann, parameters, cv=5, scoring='balanced_accuracy', refit='balanced_accuracy')
+                    clf = GridSearchCV(ann, parameters, cv=ps, scoring='balanced_accuracy', refit='balanced_accuracy')
                     
             else:
                 if opt.method == "LR":
@@ -406,14 +416,16 @@ if __name__ == "__main__":
             # fit and score the classifier                                
             clf.fit(X_train, y_train_vector)
             y_pred_vector = clf.predict(X_test)
-            accuracy = balanced_accuracy_score(y_test_vector, y_pred_vector)
+            accuracy = accuracy_score(y_test_vector, y_pred_vector)
+            balanced_accuracy = balanced_accuracy_score(y_test_vector, y_pred_vector)
             y_pred = clf.predict_proba(X_test)
             y_test = np.zeros((y_test_vector.shape[0], int(np.amax(y_test_vector)) + 1))
             y_test[np.arange(y_test_vector.shape[0]), y_test_vector] = 1
             
             if opt.replication_study and opt.trajectory == 'MMSE':
                 aibl_pred_vector = clf.predict(aibl_test)
-                aibl_accuracy = balanced_accuracy_score(aibl_y_vector, aibl_pred_vector)
+                aibl_accuracy = accuracy_score(aibl_y_vector, aibl_pred_vector)
+                aibl_balanced_accuracy = balanced_accuracy_score(aibl_y_vector, aibl_pred_vector)
                 aibl_pred = clf.predict_proba(aibl_test)
                 aibl_y = np.zeros((aibl_y_vector.shape[0], int(np.amax(aibl_y_vector)) + 1))
                 aibl_y[np.arange(aibl_y_vector.shape[0]), aibl_y_vector] = 1
@@ -439,17 +451,20 @@ if __name__ == "__main__":
         # compute subgroup analysis (edge-cases vs cognitively consistent)
         for sg in ["BE", "FE", "CC"]:
             ind = np.where(sub_list["{}_gr".format(opt.trajectory)].values[test_split] == sg)[0]
-            acc_sg = balanced_accuracy_score(y_test_vector[ind], y_pred_vector[ind])
+            acc_sg = accuracy_score(y_test_vector[ind], y_pred_vector[ind])
+            bacc_sg = balanced_accuracy_score(y_test_vector[ind], y_pred_vector[ind])
             fpr_sg,tpr_sg,_ = roc_curve(y_test[ind,:].ravel(), y_pred[ind,:].ravel())
             roc_auc_sg = auc(fpr_sg, tpr_sg)
             
             perf["acc_{}".format(sg)].append(acc_sg)
+            perf["bacc_{}".format(sg)].append(bacc_sg)
             perf["auc_{}".format(sg)].append(roc_auc_sg)
             y_pred_combined[sg] = y_pred[ind,:] if i == 0 else np.concatenate((y_pred_combined[sg], y_pred[ind,:]))
             y_test_combined[sg] = y_test[ind,:] if i == 0 else np.concatenate((y_test_combined[sg], y_test[ind,:]))
             cmatrix[sg].append(confusion_matrix(y_test_vector[ind], y_pred_vector[ind]))
                 
         perf['acc'].append(accuracy)
+        perf['bacc'].append(balanced_accuracy)
         perf['auc'].append(roc_auc)
         print("Fold {}: accuracy = {:.4f}, AUC = {:.4f}".format(i, accuracy, roc_auc))
         
@@ -460,6 +475,7 @@ if __name__ == "__main__":
             aibl_test_combined = aibl_y if i == 0 else np.concatenate((aibl_test_combined, aibl_y))
             aibl_cmatrix.append(confusion_matrix(aibl_y_vector, aibl_pred_vector))
             aibl_perf['acc'].append(aibl_accuracy)
+            aibl_perf['bacc'].append(aibl_balanced_accuracy)
             aibl_perf['auc'].append(aibl_roc_auc)
             print(np.bincount(aibl_pred_vector))
             print(np.bincount(aibl_y_vector))
@@ -496,15 +512,16 @@ if __name__ == "__main__":
     with open(opt.out_path + "model_performance.csv", "a") as f:
         if os.stat(opt.out_path + "model_performance.csv").st_size == 0:
             labels = ("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup,NoThickness," +
-                     "GridSearch,AccuracyMean,AccuracySD,AUCMean,AUCSD,")
+                     "GridSearch,AccuracyMean,AccuracySD,BalancedAccuracyMean,BalancedAccuracySD,AUCMean,AUCSD,")
             for key in perf.keys():
                 for i in range(opt.n_iterations):
                     labels += "{}_{},".format(key, i)
             f.write(labels[:-1] + "\n")
                     
-        row = "{},{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, opt.trajectory, 
+        row = "{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, opt.trajectory, 
                 opt.n_features, opt.no_clinical, opt.no_followup, opt.no_thickness, opt.grid_search,
-                np.mean(perf['acc']), np.std(perf['acc']), np.mean(perf['auc']), np.std(perf['auc']))
+                np.mean(perf['acc']), np.std(perf['acc']), np.mean(perf['bacc']), np.std(perf['bacc']),
+                np.mean(perf['auc']), np.std(perf['auc']))
         for key in perf.keys():
             for i in range(opt.n_iterations):
                 row += "{},".format(perf[key][i])
@@ -525,7 +542,7 @@ if __name__ == "__main__":
         with open(opt.out_path + "replication_performance.csv", "a") as f:
             if os.stat(opt.out_path + "replication_performance.csv").st_size == 0:
                 labels = ("Method,FeatureType,Trajectory,NumberOfFeatures,NoClinical,NoFollowup,NoThickness," +
-                         "GridSearch,AccuracyMean,AccuracySD,AUCMean,AUCSD,")
+                         "GridSearch,AccuracyMean,AccuracySD,BalancedAccuracyMean,BalancedAccuracySD,AUCMean,AUCSD,")
                 for key in aibl_perf.keys():
                     for i in range(opt.n_iterations):
                         labels += "{}_{},".format(key, i)
@@ -534,6 +551,7 @@ if __name__ == "__main__":
             row = "{},{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, opt.trajectory, 
                     opt.n_features, opt.no_clinical, opt.no_followup, opt.no_thickness, opt.grid_search,
                     np.mean(aibl_perf['acc']), np.std(aibl_perf['acc']),
+                    np.mean(aibl_perf['bacc']), np.std(aibl_perf['bacc']),
                     np.mean(aibl_perf['auc']), np.std(aibl_perf['auc']))
             for key in aibl_perf.keys():
                 for i in range(opt.n_iterations):
