@@ -4,8 +4,8 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 
-from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import GridSearchCV, PredefinedSplit
@@ -265,6 +265,10 @@ if __name__ == "__main__":
                 perf_df.append({})
                 print(net_arch)
                 
+                valid_frac = int(train_size/opt.n_iterations)                
+                train_ind = np.arange(train_size - valid_frac)
+                valid_ind = np.arange(valid_frac) + train_size - valid_frac
+                
                 tf.reset_default_graph()
                 with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
                 
@@ -280,7 +284,8 @@ if __name__ == "__main__":
                         
                         cur_time = datetime.time(datetime.now())
                         print('\nStart training time: {}'.format(cur_time))                
-                        lsn, train_metrics = train_lsn(sess, lsn, data, optimizer, opt.n_epochs, opt.batch_size, 
+                        lsn, train_metrics = train_lsn(sess, lsn, data, train_ind, valid_ind,
+                                                       optimizer, opt.n_epochs, opt.batch_size, 
                                                        opt.dropout, opt.validate_after, opt.verbose)
                         
                         # Save trained model 
@@ -375,7 +380,6 @@ if __name__ == "__main__":
             
             if opt.grid_search:
                 ps = PredefinedSplit(pd.read_pickle("predefined_splits.pkl")[opt.trajectory][i])
-                print(pd.read_pickle("predefined_splits.pkl")[opt.trajectory][i])
                 if opt.method == "LR":
                     parameters = {'penalty': ['l1', 'l2'], 'C': [1e-3, 3e-2, 1e-2, 3e-1, 1e-1, 1, 1e1, 1e2]}
                     lr = LogisticRegression(solver='liblinear', multi_class='auto', class_weight='balanced')    
@@ -548,7 +552,7 @@ if __name__ == "__main__":
                         labels += "{}_{},".format(key, i)
                 f.write(labels[:-1] + "\n")
                         
-            row = "{},{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, opt.trajectory, 
+            row = "{},{},{},{},{},{},{},{},{},{},{},{},{},{},".format(opt.method, opt.features, opt.trajectory, 
                     opt.n_features, opt.no_clinical, opt.no_followup, opt.no_thickness, opt.grid_search,
                     np.mean(aibl_perf['acc']), np.std(aibl_perf['acc']),
                     np.mean(aibl_perf['bacc']), np.std(aibl_perf['bacc']),
