@@ -52,9 +52,9 @@ if __name__ == "__main__":
                         help="keep probability during training [default=%(default)s]")
     parser.add_argument("--net_arch", type=int, nargs="+", default=[50, 50, 50, 50, 20, 10],
                         help="list of the sizes of hidden layers in the LSN default=%(default)s")
-    parser.add_argument("--save_model", action="store_true", default=False)
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False)
-    parser.add_argument("-o", "--out_path", dest="out_path", type=str, default="output/")    
+    parser.add_argument("-o", "--out_path", dest="out_path", type=str, 
+                        default="/data/chamal/projects/charles/Predict-Decline/analysis/output/")    
     opt = parser.parse_args()
     
     # performance metrics to be measured
@@ -78,15 +78,17 @@ if __name__ == "__main__":
             print("Loading data...")
     
         # load data and train-test splits specifications
-        df = pd.read_csv("Exp_502_602_combined.csv")
-        splits = pd.read_pickle("train_test_splits.pkl")
+        df_dir = "/data/chamal/projects/charles/Predict-Decline/derivatives/data_frames/"
+        splits_dir = "/data/chamal/projects/charles/Predict-Decline/methods/splits/"
+        df = pd.read_csv(df_dir + "Exp_502_602_combined.csv")
+        splits = pd.read_pickle(splits_dir + "train_test_splits.pkl")
         train_split = splits[opt.trajectory]["train"][i]
         test_split = splits[opt.trajectory]["test"][i]
         sub_list = df[df["STATUS"].isin(["OK", "Add", "New"])]
         sub_list = sub_list.reset_index(drop=True)
         
         if opt.replication_study: # load the AIBL replication data
-            df_aibl = pd.read_csv("AIBL_replication_data.csv")
+            df_aibl = pd.read_csv(df_dir + "AIBL_replication_data.csv")
         
         if not opt.no_thickness:
             
@@ -105,13 +107,15 @@ if __name__ == "__main__":
                     aibl_followup = df_aibl[ct_cols_followup].values
         
             else: # obtain the reduced datasets with feature selection
-                X_train_baseline = np.load("data/{}_bl_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-                X_train_followup = np.load("data/{}_vartp_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-                X_test_baseline = np.load("data/{}_bl_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
-                X_test_followup = np.load("data/{}_vartp_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                data_dir = "/data/chamal/projects/charles/Predict-Decline/derivatives/ADNIMERGE_reduced/"
+                X_train_baseline = np.load(data_dir + "{}_bl_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                X_train_followup = np.load(data_dir + "{}_vartp_train_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                X_test_baseline = np.load(data_dir + "{}_bl_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
+                X_test_followup = np.load(data_dir + "{}_vartp_test_{}_cv{}.npy".format(opt.features, opt.trajectory, i))
                 if opt.replication_study and opt.trajectory == "MMSE":
-                    aibl_baseline = np.load("data_replication/{}_bl_cv{}.npy".format(opt.features, i))
-                    aibl_followup = np.load("data_replication/{}_vartp_cv{}.npy".format(opt.features, i))
+                    data_replication_dir = "/data/chamal/projects/charles/Predict-Decline/derivatives/AIBL_reduced/"
+                    aibl_baseline = np.load(data_replication_dir + "{}_bl_cv{}.npy".format(opt.features, i))
+                    aibl_followup = np.load(data_replication_dir + "{}_vartp_cv{}.npy".format(opt.features, i))
     
         # load trajectory classes and auxiliary data
         if opt.trajectory == "MMSE":
@@ -137,8 +141,6 @@ if __name__ == "__main__":
         
         if opt.method == "LSN":    
             # get ready to train the LSN
-            if opt.save_model:
-                save_model_path = os.getcwd() + "/TF_trained_models/"
             MR_shape = X_train_baseline.shape[1]
             train_size = X_train_baseline.shape[0]
             test_size = X_test_baseline.shape[0]
@@ -161,7 +163,7 @@ if __name__ == "__main__":
                 
                 best_valid_acc = 0.0
                 config_number = 0
-                ps = np.array(pd.read_pickle("predefined_splits.pkl")[opt.trajectory][i])          
+                ps = np.array(pd.read_pickle(splits_dir + "predefined_splits.pkl")[opt.trajectory][i])          
                 
                 for lsz in layer_sizes:
                     config_number += 1
@@ -173,7 +175,6 @@ if __name__ == "__main__":
                     for hidden_layer in range(len(lsz)-2):
                         net_arch['l{}'.format(hidden_layer+1)] = lsz[hidden_layer]
                     perf_df.append({})
-                    print(net_arch)
                     
                     valid_acc = np.zeros(opt.n_iterations)
                     for cv_iter in range(opt.n_iterations): # do 5 cross-validation folds
@@ -263,7 +264,6 @@ if __name__ == "__main__":
                 for hidden_layer in range(len(opt.net_arch)-2):
                     net_arch['l{}'.format(hidden_layer+1)] = opt.net_arch[hidden_layer]
                 perf_df.append({})
-                print(net_arch)
                 
                 valid_frac = int(train_size/opt.n_iterations)                
                 train_ind = np.arange(train_size - valid_frac)
@@ -287,12 +287,6 @@ if __name__ == "__main__":
                         lsn, train_metrics = train_lsn(sess, lsn, data, train_ind, valid_ind,
                                                        optimizer, opt.n_epochs, opt.batch_size, 
                                                        opt.dropout, opt.validate_after, opt.verbose)
-                        
-                        # Save trained model 
-                        if opt.save_model:
-                            filename = "{}_{}_{}_{}".format(opt.features, opt.trajectory, MR_shape, i)
-                            print('saving model at {}'.format("models/" + filename))
-                            saver.save(sess, "models/" + filename)
                         
                         cur_time = datetime.time(datetime.now())
                         print('End training time: {}\n'.format(cur_time))  
@@ -379,7 +373,7 @@ if __name__ == "__main__":
                     aibl_test = np.concatenate((aibl_baseline, aibl_followup, aibl_aux), axis=1)
             
             if opt.grid_search:
-                ps = PredefinedSplit(pd.read_pickle("predefined_splits.pkl")[opt.trajectory][i])
+                ps = PredefinedSplit(pd.read_pickle(splits_dir + "predefined_splits.pkl")[opt.trajectory][i])
                 if opt.method == "LR":
                     parameters = {'penalty': ['l1', 'l2'], 'C': [1e-3, 3e-2, 1e-2, 3e-1, 1e-1, 1, 1e1, 1e2]}
                     lr = LogisticRegression(solver='liblinear', multi_class='auto', class_weight='balanced')    
@@ -449,8 +443,6 @@ if __name__ == "__main__":
         y_pred_combined['all'] = y_pred if i == 0 else np.concatenate((y_pred_combined['all'], y_pred))
         y_test_combined['all'] = y_test if i == 0 else np.concatenate((y_test_combined['all'], y_test))
         cmatrix['all'].append(confusion_matrix(y_test_vector, y_pred_vector))
-        print(np.bincount(y_pred_vector))
-        print(np.bincount(y_test_vector))
         
         # compute subgroup analysis (edge-cases vs cognitively consistent)
         for sg in ["BE", "FE", "CC"]:
@@ -481,8 +473,6 @@ if __name__ == "__main__":
             aibl_perf['acc'].append(aibl_accuracy)
             aibl_perf['bacc'].append(aibl_balanced_accuracy)
             aibl_perf['auc'].append(aibl_roc_auc)
-            print(np.bincount(aibl_pred_vector))
-            print(np.bincount(aibl_y_vector))
     
     # compute stats for the ROC curve    
     fpr,tpr,_ = roc_curve(y_test_combined['all'].ravel(), y_pred_combined['all'].ravel())
@@ -495,9 +485,6 @@ if __name__ == "__main__":
     if opt.replication_study and opt.trajectory == 'MMSE':
         fpr,tpr,_ = roc_curve(aibl_test_combined.ravel(), aibl_pred_combined.ravel())
         aibl_roc_stats = {'fpr': fpr, 'tpr': tpr}
-        print(aibl_perf)
-    
-    print(perf)
         
     # save ROC stats and confusion matrix
     prefix = "{}_{}_{}_{}_".format(opt.method, opt.features, opt.trajectory, opt.n_features)
