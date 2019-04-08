@@ -15,7 +15,7 @@ Machine learning classification methods:
 - Support Vector Machines
 - Longitudinal Siamese Network (Bhagwat et al., 2018)
 
-Set up module dependencies: \n
+Set up module dependencies:
 ```module load anaconda/5.1.0-python3```
 
 List of packages in conda virtual machine:
