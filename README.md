@@ -1,5 +1,5 @@
 # Predict-Decline
-Feature selection on vertex-wise CT measures to predict cognitive decline. Continuation of previous work by Nikhil (Bhagwat, Nikhil, Joseph D. Viviano, Aristotle N. Voineskos, M. Mallar Chakravarty, and Alzheimer’s Disease Neuroimaging Initiative. 2018. “Modeling and Prediction of Clinical Symptom Trajectories in Alzheimer’s Disease Using Longitudinal Data.” PLoS Computational Biology 14 (9): e1006376.)
+Dimensionality reduction of vertex-wise CT measures to predict cognitive decline. Continuation of previous work by Nikhil (Bhagwat, Nikhil, Joseph D. Viviano, Aristotle N. Voineskos, M. Mallar Chakravarty, and Alzheimer’s Disease Neuroimaging Initiative. 2018. “Modeling and Prediction of Clinical Symptom Trajectories in Alzheimer’s Disease Using Longitudinal Data.” PLoS Computational Biology 14 (9): e1006376.)
 
 Feature selection methods:
 - Automated Anatomical Labeling (baseline)
